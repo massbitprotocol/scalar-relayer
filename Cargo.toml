@@ -1,0 +1,41 @@
+[package]
+name = "scalar-relayer"
+version = "0.1.0"
+rust-version = "1.65"
+authors = ["Vu Viet Tai <tai@codelight.co"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+resolver = "2"
+
+[dependencies]
+clap = {version = "3.0", default-features = false, features = ["std", "cargo", "env"]}
+ethers = { version = "2.0", features = ["abigen", "ipc", "rustls", "ws"]}
+eyre = "0.6"
+futures = "0.3.21"
+serde = "1.0"
+serde_json = "1.0"
+tokio = { version = "1.8", features = ["rt-multi-thread", "macros", "signal", "net", "sync"], default-features = false }
+toml = { version = "0.8.1" }
+toml_edit = { version = "0.19.10" }
+tonic = { version = "0.10.1", features = ["transport", "tls"] }
+tonic-build = { version = "0.10.1", features = [ "prost", "transport" ] }
+tonic-health = "0.10.1"
+tower = { version = "0.4.12", features = ["full", "util", "timeout", "load-shed", "limit"] }
+tower-http = { version = "0.3.4", features = ["cors", "full", "trace", "set-header", "propagate-header"] }
+
+
+# tracing
+tracing = "0.1.37"
+tracing-subscriber= {version = "0.3", features = ["json", "env-filter"]}
+tracing-futures = "0.2.5"
+anyhow = "1.0.75"
+prost = "0.12.1"
+async-stream = "0.3.5"
+
+
+[build-dependencies]
+anyhow = "1.0.75"
+ethers = { version = "2.0", features = ["abigen", "ipc", "rustls", "ws"]}
+ethers-solc = { version = "2.0" }
+eyre = "0.6.8"
+tonic-build = "0.10.1"

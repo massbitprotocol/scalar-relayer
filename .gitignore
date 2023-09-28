@@ -1,0 +1,4 @@
+.DS_Store
+target
+solidity/node_modules
+solidity/artifacts

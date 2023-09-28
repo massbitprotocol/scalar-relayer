@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  local_chains:
+    build:
+      context: ./
+      dockerfile: Dockerfile.chains
+    image: local_chains
+    container_name: local_chains
+    restart: always
+    volumes:
+      - ../../axelar:/axelar:rw
+    working_dir: /axelar
+    command: "sleep infinity"
+    ports:
+      - 8500:8500
+      - 8550:3000
+    tty: true    
+  scalar-relayer:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    container_name: scalar-relayer
+    restart: always
+    volumes:
+      - .:/scalar-relayer
+      - ./config:/opt/config
+    working_dir: /scalar-relayer
+    command: "sleep infinity"
+    tty: true    
