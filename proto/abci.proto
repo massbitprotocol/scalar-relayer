@@ -20,16 +20,43 @@
 
  package abci;
 
+ message CallContractRequest {
+  string sender = 1;
+  string destination_chain = 2;
+  string destination_contract_address = 3;
+  bytes payload_hash = 4;
+  bytes payload = 5;
+ }
+
+ message CallContractResponse {
+  
+ }
+
+ message RequestArk {
+  string payload = 1;
+ }
+
+ message ScalarOutTransaction {
+  string message = 1;
+ }
+
+ message KeygenOutput {
+    bytes pub_key = 1; 
+ }
+
  // ScalarAbciRequest is the request for ScalarAbci.
  message ScalarAbciRequest {
-   string namespace = 1;
-   bytes message = 2; 
+   string payload = 1; 
  }
 
  // ScalarAbciResponse is the response for ScalarAbci.
  message ScalarAbciResponse {
-   string namespace = 1;
-   bytes message = 2; 
+   oneof message {
+    RequestArk ark = 1;
+    ScalarOutTransaction tran = 2;
+    KeygenOutput keygen = 3;
+   }
+
  }
 
  // Echo is the echo service.
