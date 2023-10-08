@@ -1,9 +1,11 @@
 use crate::proto::scalar_abci_response::Message;
-use crate::proto::{RequestArk, ScalarAbciResponse, ScalarOutTransaction};
-use crate::SUPPORTED_CHAINS;
+use crate::proto::{KeygenOutput, RequestArk, ScalarAbciResponse, ScalarOutTransaction};
+use crate::{SELECTOR_APPROVE_CONTRACT_CALL, SUPPORTED_CHAINS};
 mod evm;
 pub(super) mod types;
 use crate::proto::{scalar_abci_client::ScalarAbciClient, ScalarAbciRequest};
+use crate::relayer::types::{ApproveContractCallParam, ExecuteData};
+use crate::types::ScalarOutgoingMessage;
 use crate::{
     abis::axelar_gateway::{AxelarGateway, AxelarGatewayEvents},
     types::ContractCallFilter,
@@ -14,7 +16,6 @@ use ethers::utils::hex::FromHex;
 pub use evm::*;
 use futures::future::join_all;
 use serde::Deserialize;
-use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -48,12 +49,14 @@ pub trait Relayer {}
 pub async fn start_listener(
     config: RelayerConfig,
     grpc_client: Option<ScalarAbciClient<Channel>>,
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::UnboundedSender<ScalarOutgoingMessage>,
 ) -> anyhow::Result<()> {
     //let handle = tokio::spawn(async move {});
-    if let (Some(url), Some(call_contract)) =
-        (config.ws_addr.as_ref(), config.call_contract.as_ref())
-    {
+    if let (Some(url), Some(call_contract), Some(chain_id)) = (
+        config.ws_addr.as_ref(),
+        config.call_contract.as_ref(),
+        config.get_chain_id(),
+    ) {
         info!("Start relayer with websocket url {:?}", url);
         let provider = Provider::<Ws>::connect(url.as_str())
             .await
@@ -62,8 +65,9 @@ pub async fn start_listener(
         let client = Arc::new(provider);
         let address: Address = call_contract.parse()?;
         info!("Call contract {:?}", &address);
-        let (tx_external_event, mut rx_external_event) = mpsc::unbounded_channel::<String>();
+        let (tx_external_event, mut rx_external_event) = mpsc::unbounded_channel::<Vec<u8>>();
         let mut handles: Vec<JoinHandle<Result<(), anyhow::Error>>> = Vec::new();
+        let chain_id_clone = chain_id.clone();
         let listener_handle: JoinHandle<Result<(), _>> = tokio::spawn(async move {
             let gateway = AxelarGateway::new(address, client.clone());
             let events = gateway.events().from_block(9794376);
@@ -91,11 +95,19 @@ pub async fn start_listener(
                 payload: bytes.unwrap(),
             };
             info!("AxelarGateway event {:?}", &event_value);
+
             let duration = Duration::from_millis(180_000);
             loop {
-                info!("Init AxelarGateway event {:?}", &event_value);
-                let json = serde_json::to_string(&event_value).unwrap();
-                let res = tx_external_event.send(json);
+                let approve_contract_param: Vec<u8> =
+                    ApproveContractCallParam::from(event_value.clone()).into();
+                let execute_data = ExecuteData::from_command(
+                    chain_id_clone,
+                    SELECTOR_APPROVE_CONTRACT_CALL,
+                    approve_contract_param,
+                );
+                info!("Init AxelarGateway event {:?}", &execute_data);
+                let message: Vec<u8> = execute_data.into();
+                let res = tx_external_event.send(message);
                 sleep(duration).await;
             }
             //     while let Some(Ok(evt)) = stream.next().await {
@@ -168,15 +180,15 @@ pub async fn start_listener(
                 while let Some(Ok(ScalarAbciResponse { message })) = resp_stream.next().await {
                     match message {
                         Some(Message::Ark(RequestArk { payload })) => {
-                            info!("Ark message: `{}`", &payload);
+                            info!("Ark message: `{}`", hex::encode(&payload));
                         }
                         Some(Message::Tran(ScalarOutTransaction { message })) => {
                             info!("Send message to the relayer: `{}`", &message);
-                            let _ = tx.send(message);
+                            let _ = tx.send(ScalarOutgoingMessage::Transaction(message));
                         }
-                        Some(Message::Keygen(ScalarKeygen { pub_key })) => {
-                            info!("Send new tss - pubkey to the relayers: `{}`", &pub_key);
-                            let _ = tx.send(message);
+                        Some(Message::Keygen(KeygenOutput { pub_key })) => {
+                            info!("Send new tss - pubkey to the relayers: {:?}", &pub_key);
+                            let _ = tx.send(ScalarOutgoingMessage::KeygenData(pub_key));
                         }
                         None => {}
                     }

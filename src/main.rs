@@ -1,12 +1,19 @@
 use crate::relayer::EvmRelayer;
 use anyhow::{anyhow, Result};
+use ethers::utils::keccak256;
 use futures::future::join_all;
+use k256::{
+    ecdsa::{hazmat::VerifyPrimitive, RecoveryId, Signature, VerifyingKey},
+    elliptic_curve::{sec1::FromEncodedPoint, PrimeField},
+    FieldBytes,
+};
 use scalar_relayer::config::parse_args;
 use scalar_relayer::proto::scalar_abci_client::ScalarAbciClient;
 use scalar_relayer::relayer::{self, RelayerConfigs};
-use scalar_relayer::types::ContractCallFilter;
 use scalar_relayer::types::ScalarEventTransaction;
+use scalar_relayer::types::{ContractCallFilter, ScalarOutgoingMessage};
 use scalar_relayer::{grpc, TSS_ADDRESS};
+use sha3::{Digest, Keccak256};
 use std::fs;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::task::JoinHandle;
@@ -60,7 +67,7 @@ async fn main() -> Result<()> {
             .expect(format!("Failed to read relayer config file {}", config_path).as_str());
         let relayer_configs: RelayerConfigs = toml::from_str(config_str.as_str())?;
         //info!("RelayerConfigs {:?}", &relayer_configs);
-        let (tx_out, rx_out) = mpsc::unbounded_channel::<String>();
+        let (tx_out, rx_out) = mpsc::unbounded_channel::<ScalarOutgoingMessage>();
         let sender_handle = spawn_sender(relayer_configs.clone(), rx_out);
         handles.push(sender_handle);
 
@@ -99,36 +106,89 @@ async fn main() -> Result<()> {
 
 fn spawn_sender(
     relayer_configs: RelayerConfigs,
-    mut rx_out: UnboundedReceiver<String>,
+    mut rx_out: UnboundedReceiver<ScalarOutgoingMessage>,
 ) -> JoinHandle<()> {
     let tss_address = TSS_ADDRESS.clone();
     info!("Tss_address {:#02x?}", &tss_address);
     tokio::spawn(async move {
+        let mut pub_key = vec![];
         while let Some(item) = rx_out.recv().await {
             //let value = serde_json::to_string(&item).unwrap();
             //println!("Push block into stream {:?}", &value);
-            let ScalarEventTransaction {
-                payload,
-                tss_signature,
-            } = serde_json::from_str(item.as_str()).unwrap();
-            let event_value: ContractCallFilter =
-                serde_json::from_slice(payload.as_slice()).unwrap();
-            info!(
-                "Receive message {:?} with signature {:?} of length {:?}. Todo: Send it to the destination chain",
-                &event_value, &tss_signature, tss_signature.len()
-            );
-            //[48, 69, 2, 33, 0, 203, 84, 195, 47, 156, 83, 199, 231, 106, 54, 196, 67, 234, 18, 196, 66, 228, 133, 112, 120, 166, 233, 20, 53, 233, 18, 162, 219, 184, 100, 135, 190, 2, 32, 41, 211, 198, 193, 14, 127, 245, 90, 169, 218, 20, 59, 161, 1, 94, 96, 56, 192, 80, 198, 254, 180, 100, 181, 23, 68, 44, 69, 226, 224, 0, 118]
-            // let destination_chain = event_value.destination_chain.clone();
-            if let Some(des_relayer_config) = relayer_configs.relayer_evm.iter().find(|item| {
-                item.start_with_bridge.unwrap_or(false)
-                    && item.rpc_addr.is_some()
-                    && item.name.as_str() == event_value.destination_chain.as_str()
-            }) {
-                let evm_relayer = EvmRelayer::new(&des_relayer_config);
-                let res = evm_relayer
-                    .call_destination_contract(event_value, tss_address.clone(), tss_signature)
-                    .await;
+            match item {
+                ScalarOutgoingMessage::KeygenData(key) => {
+                    pub_key = key.clone();
+                    handle_keygen_data(&relayer_configs, key).await;
+                }
+                ScalarOutgoingMessage::Transaction(tran) => {
+                    handle_transaction(&relayer_configs, pub_key.as_slice(), tran).await;
+                }
             }
         }
     })
+}
+async fn handle_keygen_data(
+    relayer_configs: &RelayerConfigs,
+    pubkey: Vec<u8>,
+) -> anyhow::Result<()> {
+    //https://docs.rs/k256/latest/k256/ecdsa/#recovering-a-verifyingkey-from-a-signature
+    let verified_key = VerifyingKey::from_sec1_bytes(pubkey.as_slice())?;
+    let handles = relayer_configs
+        .relayer_evm
+        .iter()
+        .find(|item| item.start_with_bridge.unwrap_or(false) && item.rpc_addr.is_some())
+        .map(|config| {
+            let config = config.clone();
+            tokio::spawn(async move {
+                let evm_relayer = EvmRelayer::new(config);
+                let res = evm_relayer.update_pubkey(pubkey.clone()).await;
+            })
+        });
+    join_all(handles).await;
+    Ok(())
+}
+
+async fn handle_transaction(
+    relayer_configs: &RelayerConfigs,
+    pubkey: &[u8],
+    message: String,
+) -> anyhow::Result<()> {
+    let ScalarEventTransaction {
+        payload,
+        tss_signature,
+    } = serde_json::from_str(message.as_str()).unwrap();
+    // https://docs.rs/k256/latest/k256/ecdsa/#recovering-a-verifyingkey-from-a-signature
+    // https://bitcoin.stackexchange.com/questions/77191/what-is-the-maximum-size-of-a-der-encoded-ecdsa-signature
+    // Todo: new create signature from Signature_Der
+    let pubkey =
+        k256::AffinePoint::from_encoded_point(&k256::EncodedPoint::from_bytes(pubkey).unwrap())
+            .unwrap();
+    let signature = k256::ecdsa::Signature::from_der(tss_signature.as_slice()).unwrap();
+    let payload_hash = keccak256(payload.as_slice()).to_vec();
+    assert!(pubkey
+        .verify_prehashed(&FieldBytes::from_slice(payload_hash.as_slice()), &signature)
+        .is_ok());
+    let recid = RecoveryId::try_from(1u8)?;
+    let digest = Keccak256::new_with_prefix(payload);
+    let recovered_key = VerifyingKey::recover_from_digest(payload_hash, &signature, recid)?;
+
+    // let event_value: ContractCallFilter = serde_json::copy_from_sliceice(payload.as_slice()).unwrap();
+    // info!(
+    //     "Receive message {:?} with signature {:?} of length {:?}. Todo: Send it to the destination chain",
+    //     &event_value, &tss_signature, tss_signature.len()
+    // );
+    // //[48, 69, 2, 33, 0, 203, 84, 195, 47, 156, 83, 199, 231, 106, 54, 196, 67, 234, 18, 196, 66, 228, 133, 112, 120, 166, 233, 20, 53, 233, 18, 162, 219, 184, 100, 135, 190, 2, 32, 41, 211, 198, 193, 14, 127, 245, 90, 169, 218, 20, 59, 161, 1, 94, 96, 56, 192, 80, 198, 254, 180, 100, 181, 23, 68, 44, 69, 226, 224, 0, 118]
+    // // let destination_chain = event_value.destination_chain.clone();
+    // if let Some(des_relayer_config) = relayer_configs.relayer_evm.iter().find(|item| {
+    //     item.start_with_bridge.unwrap_or(false)
+    //         && item.rpc_addr.is_some()
+    //         && item.name.as_str() == event_value.destination_chain.as_str()
+    // }) {
+    //     let config = des_relayer_config.clone();
+    //     let evm_relayer = EvmRelayer::new(config);
+    //     let res = evm_relayer
+    //         .call_destination_contract(payload, tss_signature)
+    //         .await;
+    // }
+    Ok(())
 }

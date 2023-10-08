@@ -1,6 +1,8 @@
 use crate::abis::axelar_gateway;
 use ethers::types::{Bytes, H160};
 use serde::{Deserialize, Serialize};
+pub type Byte32 = [u8; 32];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContractCallFilter {
     pub sender: H160,
@@ -48,4 +50,10 @@ impl From<axelar_gateway::ContractCallFilter> for ContractCallFilter {
 pub struct ScalarEventTransaction {
     pub payload: Vec<u8>,
     pub tss_signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ScalarOutgoingMessage {
+    Transaction(String),
+    KeygenData(Vec<u8>),
 }

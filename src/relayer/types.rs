@@ -1,12 +1,68 @@
-use crate::relayer::k256::ecdsa::Signature;
+use crate::{
+    types::{Byte32, ContractCallFilter},
+    OWNER_ADDRESS, OWNER_PRIVATE_KEY, SELECTOR_APPROVE_CONTRACT_CALL,
+};
 use anyhow::{anyhow, Result};
 use ethers::{
     abi::{Bytes, Token},
-    types::{Address, U256},
+    core::types::Signature,
+    signers::{LocalWallet, Signer},
+    types::{Address, Sign, U256},
+    utils::keccak256,
 };
 use k256::ecdsa::DerSignature;
 use serde::{Deserialize, Serialize};
-type Byte32 = [u8; 32];
+pub struct OwnerShipData {
+    operators: Vec<Address>,
+    weights: Vec<U256>,
+    threshold: U256,
+}
+impl OwnerShipData {
+    // pub fn new(
+    //     operators: Vec<Address>,
+    //     weights: Vec<U256>,
+    //     threshold: U256,
+    // ) -> Self {
+    //     Self {
+    //         operators,
+    //         weights,
+    //         threshold,
+    //     }
+    // }
+}
+impl From<Address> for OwnerShipData {
+    fn from(value: Address) -> Self {
+        Self {
+            operators: vec![value],
+            weights: vec![U256::one()],
+            threshold: U256::one(),
+        }
+    }
+}
+impl Into<Vec<u8>> for OwnerShipData {
+    fn into(self) -> Vec<u8> {
+        let Self {
+            operators,
+            weights,
+            threshold,
+        } = self;
+        let mut tokens = vec![];
+        tokens.push(Token::Array(
+            operators
+                .into_iter()
+                .map(|addr| Token::Address(addr))
+                .collect::<Vec<Token>>(),
+        ));
+        tokens.push(Token::Array(
+            weights
+                .into_iter()
+                .map(|weight| Token::Uint(weight))
+                .collect::<Vec<Token>>(),
+        ));
+        tokens.push(Token::Uint(threshold));
+        ethers::abi::encode(tokens.as_slice())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApproveContractCallParam {
@@ -16,6 +72,19 @@ pub struct ApproveContractCallParam {
     pub payload_hash: Byte32,
     pub source_tx_hash: Byte32,
     pub source_event_index: U256,
+}
+impl From<ContractCallFilter> for ApproveContractCallParam {
+    fn from(value: ContractCallFilter) -> Self {
+        let contract_address = value.destination_contract_address.parse().unwrap();
+        Self {
+            source_chain: String::default(),
+            source_address: value.sender.to_string(),
+            contract_address,
+            payload_hash: value.payload_hash.clone(),
+            source_tx_hash: keccak256("Sometransaction"),
+            source_event_index: U256::one(),
+        }
+    }
 }
 impl Into<Vec<u8>> for ApproveContractCallParam {
     fn into(self) -> Vec<u8> {
@@ -37,7 +106,7 @@ impl Into<Vec<u8>> for ApproveContractCallParam {
         ethers::abi::encode(tokens.as_slice())
     }
 }
-
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecuteData {
     chain_id: U256,
     command_ids: Vec<Byte32>,
@@ -58,7 +127,19 @@ impl ExecuteData {
             params,
         }
     }
+    pub fn from_command(chain_id: U256, command: &str, param: Bytes) -> Self {
+        Self {
+            chain_id,
+            command_ids: vec![keccak256(command.as_bytes())],
+            commands: vec![String::from(command)],
+            params: vec![param],
+        }
+    }
+    pub fn set_chain_id(&mut self, chain_id: U256) {
+        self.chain_id = chain_id;
+    }
 }
+
 impl Into<Vec<u8>> for ExecuteData {
     fn into(self) -> Vec<u8> {
         let Self {
@@ -96,6 +177,20 @@ pub struct ExecuteProof {
     weights: Vec<U256>,
     threshold: U256,
     signatures: Vec<Bytes>,
+}
+impl ExecuteProof {
+    pub async fn owner_sign(data: &ExecuteData) -> Self {
+        let bytes: Vec<u8> = data.clone().into();
+        //let wallet: LocalWallet = OWNER_WALLET;
+        let wallet: LocalWallet = OWNER_PRIVATE_KEY.parse().unwrap();
+        let signature: Signature = wallet.sign_message(bytes).await.unwrap();
+        Self {
+            operators: vec![OWNER_ADDRESS.clone()],
+            weights: vec![U256::one()],
+            threshold: U256::one(),
+            signatures: vec![signature.to_vec()],
+        }
+    }
 }
 // impl ExecuteProof {
 //     pub fn new(
@@ -150,37 +245,39 @@ impl TryFrom<(Address, DerSignature)> for ExecuteProof {
     fn try_from(
         (address, der_signature): (Address, DerSignature),
     ) -> Result<ExecuteProof, Self::Error> {
-        Signature::from_der(der_signature.as_bytes())
-            .map(|signature| {
-                let mut sig_data = signature.to_vec();
-                sig_data.push(27_u8);
-                ExecuteProof {
-                    operators: vec![address],
-                    weights: vec![U256::from(1)],
-                    threshold: U256::from(1),
-                    signatures: vec![sig_data],
-                }
-            })
-            .map_err(|err| anyhow!("Deserialize error {:?}", &err))
+        // Signature::from_der(der_signature.as_bytes())
+        //     .map(|signature| {
+        //         let mut sig_data = signature.to_vec();
+        //         sig_data.push(27_u8);
+        //         ExecuteProof {
+        //             operators: vec![address],
+        //             weights: vec![U256::one()],
+        //             threshold: U256::one(),
+        //             signatures: vec![sig_data],
+        //         }
+        //     })
+        //     .map_err(|err| anyhow!("Deserialize error {:?}", &err))
+        Err(anyhow!("Testing"))
     }
 }
 
 impl ExecuteProof {
     //Create Proof from tss signature in forma ANS.1 DER
     pub fn from_tss_signature(address: Address, der_signature: Vec<u8>) -> Result<Self> {
-        Signature::from_der(der_signature.as_ref())
-            .map(|signature| {
-                //Signature contain only r,s component
-                let mut sig_data = signature.to_vec();
-                sig_data.push(27_u8);
-                ExecuteProof {
-                    operators: vec![address],
-                    weights: vec![U256::from(1)],
-                    threshold: U256::from(1),
-                    signatures: vec![sig_data],
-                }
-            })
-            .map_err(|err| anyhow!("Deserialize error {:?}", &err))
+        // Signature::from_der(der_signature.as_ref())
+        //     .map(|signature| {
+        //         //Signature contain only r,s component
+        //         let mut sig_data = signature.to_vec();
+        //         sig_data.push(27_u8);
+        //         ExecuteProof {
+        //             operators: vec![address],
+        //             weights: vec![U256::one()],
+        //             threshold: U256::one(),
+        //             signatures: vec![sig_data],
+        //         }
+        //     })
+        //     .map_err(|err| anyhow!("Deserialize error {:?}", &err))
+        Err(anyhow!("Testing"))
     }
 }
 pub struct ExecuteParam {

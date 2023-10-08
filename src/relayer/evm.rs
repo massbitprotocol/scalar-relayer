@@ -1,18 +1,19 @@
 use super::types::ApproveContractCallParam;
 use super::types::ExecuteData;
+use super::types::OwnerShipData;
 use super::RelayerConfig;
 use crate::abis::axelar_gateway::AxelarGateway;
+use crate::relayer::types::ExecuteParam;
+use crate::relayer::types::ExecuteProof;
 use crate::types::ContractCallFilter;
 use crate::HASH_SELECTOR_APPROVE_CONTRACT_CALL;
+use crate::OWNER_ADDRESS;
 use crate::SELECTOR_APPROVE_CONTRACT_CALL;
-use crate::{abis::axelar_auth_weighted::AxelarAuthWeighted, relayer::types::ExecuteParam};
-use anyhow::anyhow;
-use ethers::abi::ParamType;
+use crate::SELECTOR_TRANSFER_OPERATORSHIP;
+use crate::TSS_ADDRESS;
 use ethers::prelude::*;
-use ethers::utils::hex::FromHex;
 use ethers::utils::keccak256;
 use k256::ecdsa::{DerSignature, Signature};
-use std::ops::Add;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -24,7 +25,13 @@ impl EvmRelayerInner {
     fn new(config: RelayerConfig) -> Self {
         Self { config }
     }
-    pub async fn update_tss_private_key(&mut self) -> anyhow::Result<()> {
+    fn get_ownership_data(&self) -> Bytes {
+        let owner = OwnerShipData::from(TSS_ADDRESS.clone());
+        let data: Vec<u8> = owner.into();
+        info!("Ownership data 0x{}", hex::encode(data.as_slice()));
+        Bytes::from_iter(data)
+    }
+    pub async fn update_ownership(&mut self) -> anyhow::Result<()> {
         if let (Some(rpc_url), Some(contract_addr)) = (
             self.config.rpc_addr.as_ref(),
             self.config.call_contract.as_ref(),
@@ -32,15 +39,69 @@ impl EvmRelayerInner {
             let provider = Provider::<Http>::try_from(rpc_url)?;
             let client = Arc::new(provider);
             let address: Address = contract_addr.parse()?;
-            let contract = AxelarAuthWeighted::new(address, client);
-            //contract.
+            let contract = AxelarGateway::new(address, client);
+
+            if let Some(execute_param) = self.config.get_chain_id().map(|chain_id| {
+                //Question? Which tss address put in here
+                let param = OwnerShipData::from(TSS_ADDRESS.clone()).into();
+                ExecuteData::from_command(chain_id, SELECTOR_TRANSFER_OPERATORSHIP, param)
+            }) {
+                let proof = ExecuteProof::owner_sign(&execute_param).await;
+                let execute_param: Vec<u8> = ExecuteParam::new(execute_param, proof).into();
+                info!("Execute params 0x{}", hex::encode(execute_param.as_slice()));
+                match contract
+                    .execute(Bytes::from_iter(execute_param))
+                    .call()
+                    .await
+                {
+                    Ok(_) => {
+                        info!("Executed successfully");
+                    }
+                    Err(err) => {
+                        info!("Executed with error {:?}", err);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    pub async fn update_pubkey(&mut self, pubkey: Vec<u8>) -> anyhow::Result<()> {
+        if let (Some(rpc_url), Some(contract_addr)) = (
+            self.config.rpc_addr.as_ref(),
+            self.config.call_contract.as_ref(),
+        ) {
+            let provider = Provider::<Http>::try_from(rpc_url)?;
+            let client = Arc::new(provider);
+            let address: Address = contract_addr.parse()?;
+            let contract = AxelarGateway::new(address, client);
+
+            //TransferOperatorShip is marked with onlySelf call.
+            // info!("pubkey 0x{}", hex::encode(pubkey.as_slice()));
+            // if pubkey.len() == 32 {
+            //     let p1: [u8; 32] = pubkey.try_into().unwrap();
+            // } else {
+            // }
+            //let caller = contract.transfer_operatorship(self.get_ownership_data(), p1);
+            //let res = caller.call().await;
+            //Try call with execute function
+            // let execute_param = self
+            //     .config
+            //     .get_chain_id()
+            //     .map(|chain_id| {
+            //         let param = OwnerShipData::from(TSS_ADDRESS.clone()).into();
+            //         ExecuteData::from_command(chain_id, SELECTOR_TRANSFER_OPERATORSHIP, param)
+            //     })
+            //     .and_then(|data| {
+            //         ExecuteParam::from_tss_signature(data, TSS_ADDRESS.clone(), signature.clone())
+            //             .ok()
+            //     });
+            // info!("Update pubkey result {:?}", &res);
         }
         Ok(())
     }
     pub async fn call_destination_contract(
         &mut self,
-        event_value: ContractCallFilter,
-        tss_address: Address,
+        payload: Vec<u8>,
         signature: Vec<u8>,
     ) -> anyhow::Result<()> {
         if let (Some(rpc_url), Some(contract_addr)) = (
@@ -51,18 +112,18 @@ impl EvmRelayerInner {
             let client = Arc::new(provider);
             let address: Address = contract_addr.parse()?;
             let contract = AxelarGateway::new(address, client);
-            let approve_call_param = ApproveContractCallParam {
-                source_chain: "Goerli".to_string(),
-                source_address: event_value.sender.to_string(),
-                contract_address: event_value.destination_contract_address.parse().unwrap(),
-                payload_hash: event_value.payload_hash.clone(), //keccak256(event_value.payload),
-                source_tx_hash: keccak256(
-                    "0x69a38e71ce125c1e205a958c33a61b17de25852ae497837034ddaed60a8a33ca",
-                ),
-                source_event_index: U256::from(1),
-            };
-            let param_data: Vec<u8> = approve_call_param.into();
-            info!("Approve params 0x{}", hex::encode(param_data.as_slice()));
+            // let approve_call_param = ApproveContractCallParam {
+            //     source_chain: "Goerli".to_string(),
+            //     source_address: event_value.sender.to_string(),
+            //     contract_address: event_value.destination_contract_address.parse().unwrap(),
+            //     payload_hash: event_value.payload_hash.clone(), //keccak256(event_value.payload),
+            //     source_tx_hash: keccak256(
+            //         "0x69a38e71ce125c1e205a958c33a61b17de25852ae497837034ddaed60a8a33ca",
+            //     ),
+            //     source_event_index: U256::from(1),
+            // };
+            // let param_data: Vec<u8> = approve_call_param.into();
+            info!("Approve params 0x{}", hex::encode(payload.as_slice()));
             //info!("Approve params {:#02x?}", param_data);
             //let signature = DerSignature::try_from(signature.as_slice())?;
             //let signature = Signature::from_der(signature.as_slice());
@@ -116,15 +177,11 @@ impl EvmRelayerInner {
                 .config
                 .get_chain_id()
                 .map(|chain_id| {
-                    ExecuteData::new(
-                        chain_id,
-                        command_ids,
-                        commands,
-                        vec![event_value.payload.as_ref().to_vec()],
-                    )
+                    ExecuteData::new(chain_id, command_ids, commands, vec![payload.clone()])
                 })
                 .and_then(|data| {
-                    ExecuteParam::from_tss_signature(data, tss_address, signature.clone()).ok()
+                    ExecuteParam::from_tss_signature(data, TSS_ADDRESS.clone(), signature.clone())
+                        .ok()
                 });
             if let Some(param) = execute_param {
                 let param_data: Vec<u8> = param.into();
@@ -161,21 +218,24 @@ pub struct EvmRelayer {
 }
 
 impl EvmRelayer {
-    pub fn new(relayer_config: &RelayerConfig) -> Self {
+    pub fn new(relayer_config: RelayerConfig) -> Self {
         let inner = EvmRelayerInner::new(relayer_config.clone());
         Self {
             internal: Arc::new(RwLock::new(inner)),
         }
     }
+    pub async fn update_pubkey(&self, pubkey: Vec<u8>) -> anyhow::Result<()> {
+        let mut guard = self.internal.write().await;
+        guard.update_pubkey(pubkey).await
+    }
     pub async fn call_destination_contract(
         &self,
-        event_value: ContractCallFilter,
-        tss_address: Address,
+        event_value: Vec<u8>,
         signature: Vec<u8>,
     ) -> anyhow::Result<()> {
         let mut guard = self.internal.write().await;
         guard
-            .call_destination_contract(event_value, tss_address, signature)
+            .call_destination_contract(event_value, signature)
             .await
     }
 }

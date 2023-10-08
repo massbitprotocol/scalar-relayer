@@ -14,17 +14,19 @@ pub const SELECTOR_MINT_TOKEN: &str = "mintToken";
 pub const SELECTOR_APPROVE_CONTRACT_CALL: &str = "approveContractCall";
 pub const SELECTOR_APPROVE_CONTRACT_CALL_WITH_MINT: &str = "approveContractCallWithMint";
 pub const SELECTOR_TRANSFER_OPERATORSHIP: &str = "transferOperatorship";
+pub const OWNER_PRIVATE_KEY: &str =
+    "84e4de1f09d9e593a9b229aacce492d4874605a0443241a78f2db48b51ce7da9";
+use ethers::signers::LocalWallet;
 use ethers::types::{Address, U256};
-use ethers::utils::keccak256;
+use ethers::utils::{hex::FromHex, keccak256};
 use std::collections::HashMap;
 use tiny_keccak::{Hasher, Keccak};
-
 lazy_static! {
     /*
      * Get chain id by config name
      * https://chainlist.org/
      */
-    pub static ref SUPPORTED_CHAINS: HashMap<&'static str, U256> = {
+    static ref SUPPORTED_CHAINS: HashMap<&'static str, U256> = {
         HashMap::from([
             ("ethereum", U256::from(1)),
             ("goerli", U256::from(5)),
@@ -41,12 +43,19 @@ lazy_static! {
         hasher.finalize(&mut output);
         Address::from_slice(&output)
     };
-    pub static ref HASH_SELECTOR_BURN_TOKEN: [u8; 32] = keccak256("burnToken".as_bytes());
-    pub static ref HASH_SELECTOR_DEPLOY_TOKEN: [u8; 32] = keccak256("deployToken");
-    pub static ref HASH_SELECTOR_MINT_TOKEN: [u8; 32] = keccak256("mintToken");
-    pub static ref HASH_SELECTOR_APPROVE_CONTRACT_CALL: [u8; 32] = keccak256("approveContractCall");
-    pub static ref HASH_SELECTOR_APPROVE_CONTRACT_CALL_WITH_MINT: [u8; 32] =
+    static ref OWNER_ADDRESS: Address =
+        Address::from_slice(
+            Vec::from_hex("2F467c697798c24788086e327B0BFD25952105fe")
+                .unwrap()
+                .as_slice(),
+        );
+
+    static ref HASH_SELECTOR_BURN_TOKEN: [u8; 32] = keccak256("burnToken".as_bytes());
+    static ref HASH_SELECTOR_DEPLOY_TOKEN: [u8; 32] = keccak256("deployToken");
+    static ref HASH_SELECTOR_MINT_TOKEN: [u8; 32] = keccak256("mintToken");
+    static ref HASH_SELECTOR_APPROVE_CONTRACT_CALL: [u8; 32] = keccak256("approveContractCall");
+    static ref HASH_SELECTOR_APPROVE_CONTRACT_CALL_WITH_MINT: [u8; 32] =
         keccak256("approveContractCallWithMint");
-    pub static ref HASH_SELECTOR_TRANSFER_OPERATORSHIP: [u8; 32] =
+    static ref HASH_SELECTOR_TRANSFER_OPERATORSHIP: [u8; 32] =
         keccak256("transferOperatorship");
 }
