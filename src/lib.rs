@@ -1,12 +1,18 @@
 #[macro_use]
 extern crate lazy_static;
-
+use std::env;
 pub mod abis;
 pub mod config;
 pub mod grpc;
 pub mod proto;
 pub mod relayer;
 pub mod types;
+use ethers::signers::LocalWallet;
+use ethers::types::{Address, U256};
+use ethers::utils::{hex::FromHex, keccak256};
+use std::collections::HashMap;
+use std::env;
+use tiny_keccak::{Hasher, Keccak};
 // pub const TSS_ADDRESS: &str = "scalar_tss_address";
 pub const SELECTOR_BURN_TOKEN: &str = "burnToken";
 pub const SELECTOR_DEPLOY_TOKEN: &str = "deployToken";
@@ -14,14 +20,12 @@ pub const SELECTOR_MINT_TOKEN: &str = "mintToken";
 pub const SELECTOR_APPROVE_CONTRACT_CALL: &str = "approveContractCall";
 pub const SELECTOR_APPROVE_CONTRACT_CALL_WITH_MINT: &str = "approveContractCallWithMint";
 pub const SELECTOR_TRANSFER_OPERATORSHIP: &str = "transferOperatorship";
-pub const OWNER_PRIVATE_KEY: &str =
-    "84e4de1f09d9e593a9b229aacce492d4874605a0443241a78f2db48b51ce7da9";
-use ethers::signers::LocalWallet;
-use ethers::types::{Address, U256};
-use ethers::utils::{hex::FromHex, keccak256};
-use std::collections::HashMap;
-use tiny_keccak::{Hasher, Keccak};
+
 lazy_static! {
+    static ref OWNER_PRIVATE_KEY: String = {
+        env::var("OWNER_PRIVATE_KEY").unwrap_or_default()
+    };
+
     /*
      * Get chain id by config name
      * https://chainlist.org/

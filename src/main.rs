@@ -1,11 +1,13 @@
 use crate::relayer::EvmRelayer;
 use anyhow::{anyhow, Result};
-use ethers::utils::keccak256;
+use ethers::{abi::ethereum_types::Public, utils::keccak256};
 use futures::future::join_all;
+use k256::elliptic_curve::group::GroupEncoding;
 use k256::{
     ecdsa::{hazmat::VerifyPrimitive, RecoveryId, Signature, VerifyingKey},
     elliptic_curve::{sec1::FromEncodedPoint, PrimeField},
-    FieldBytes,
+    pkcs8::EncodePublicKey,
+    FieldBytes, PublicKey,
 };
 use scalar_relayer::config::parse_args;
 use scalar_relayer::proto::scalar_abci_client::ScalarAbciClient;
@@ -127,12 +129,44 @@ fn spawn_sender(
         }
     })
 }
+/*
+ * pubkey here is Der encoded (compressed form with 33bytes length started with 0x02 or 0x03)
+ * Need uncompress it before calculate hash for 20 bytes of ETH address
+ */
 async fn handle_keygen_data(
     relayer_configs: &RelayerConfigs,
     pubkey: Vec<u8>,
 ) -> anyhow::Result<()> {
-    //https://docs.rs/k256/latest/k256/ecdsa/#recovering-a-verifyingkey-from-a-signature
-    let verified_key = VerifyingKey::from_sec1_bytes(pubkey.as_slice())?;
+    // https://ethereum.org/en/developers/docs/accounts/#:~:text=The%20public%20key%20is%20generated,adding%200x%20to%20the%20beginning.
+    // https://narteysarso.hashnode.dev/how-ethereum-addresses-are-generated
+    // let verified_key = VerifyingKey::from_sec1_bytes(pubkey.as_slice())?;
+    // let address = PublicKey::from(verified_key);
+    // let address = PublicKey::from_sec1_bytes(pubkey.as_slice())
+    //     .map_err(|err| anyhow!("Convert to Pubkey with error {:?}", &err))?;
+    // let address_data = address.to_public_key_der().unwrap();
+    /*
+     * The public key is generated from the private key using the Elliptic Curve Digital Signature Algorithm.
+     * You get a public address for your account by taking the last 20 bytes of the Keccak-256 hash
+     * of the public key and adding 0x to the beginning.
+     */
+    let pubkey_hash = secp256k1::PublicKey::from_slice(&pubkey.as_slice())
+        .map(|pk| {
+            let uncompressed_pubkey = pk.serialize_uncompressed();
+            info!(
+                "Uncompressed pubkey 0x{}",
+                hex::encode(&uncompressed_pubkey)
+            );
+            // Ignore first byte (0x04)
+            let pubkey = &uncompressed_pubkey[1..];
+            keccak256(&pubkey)
+        })
+        .map_err(|err| anyhow!("Error while decompress public key {:?}", &err))?;
+
+    info!(
+        "Tss pubkey 0x{}, keccak 256 hash 0x{}",
+        hex::encode(pubkey.as_slice()),
+        hex::encode(&pubkey_hash)
+    );
     let handles = relayer_configs
         .relayer_evm
         .iter()
@@ -141,7 +175,7 @@ async fn handle_keygen_data(
             let config = config.clone();
             tokio::spawn(async move {
                 let evm_relayer = EvmRelayer::new(config);
-                let res = evm_relayer.update_pubkey(pubkey.clone()).await;
+                let res = evm_relayer.update_pubkey(pubkey_hash).await;
             })
         });
     join_all(handles).await;
@@ -160,17 +194,36 @@ async fn handle_transaction(
     // https://docs.rs/k256/latest/k256/ecdsa/#recovering-a-verifyingkey-from-a-signature
     // https://bitcoin.stackexchange.com/questions/77191/what-is-the-maximum-size-of-a-der-encoded-ecdsa-signature
     // Todo: new create signature from Signature_Der
-    let pubkey =
-        k256::AffinePoint::from_encoded_point(&k256::EncodedPoint::from_bytes(pubkey).unwrap())
-            .unwrap();
+    // let expected_key = VerifyingKey::from_sec1_bytes(pubkey)?;
+    // let pubkey =
+    //     k256::AffinePoint::from_encoded_point(&k256::EncodedPoint::from_bytes(pubkey).unwrap())
+    //         .unwrap();
     let signature = k256::ecdsa::Signature::from_der(tss_signature.as_slice()).unwrap();
+    let mut sig_data: Vec<u8> = signature.to_vec();
+    // https://github.com/ethers-io/ethers.js/blob/v5.7/packages/bytes/src.ts/index.ts#L351
+    // EIP-2098; pull the v from the top bit of s and clear it
+    let first_s = &mut sig_data[32];
+    let v = 27 + (first_s.clone() >> 7);
+    *first_s &= 0x7f;
+    sig_data.push(v);
     let payload_hash = keccak256(payload.as_slice()).to_vec();
-    assert!(pubkey
-        .verify_prehashed(&FieldBytes::from_slice(payload_hash.as_slice()), &signature)
-        .is_ok());
-    let recid = RecoveryId::try_from(1u8)?;
-    let digest = Keccak256::new_with_prefix(payload);
-    let recovered_key = VerifyingKey::recover_from_digest(payload_hash, &signature, recid)?;
+    info!(
+        "Hash 0x{}, origin signature 0x{}, rsv sig 0x{}",
+        hex::encode(payload_hash.as_slice()),
+        hex::encode(signature.to_bytes().as_slice()),
+        hex::encode(sig_data)
+    );
+
+    // assert!(pubkey
+    //     .verify_prehashed(&FieldBytes::from_slice(payload_hash.as_slice()), &signature)
+    //     .is_ok());
+    // let recid = RecoveryId::try_from(1u8)?;
+    // let digest = Keccak256::new_with_prefix(payload);
+
+    // let recovered_key = VerifyingKey::recover_from_digest(digest, &signature, recid)?;
+    // info!("Verify public key");
+    // assert_eq!(recovered_key, expected_key);
+    //let pub_key = PublicKey::from(recovered_key);
 
     // let event_value: ContractCallFilter = serde_json::copy_from_sliceice(payload.as_slice()).unwrap();
     // info!(

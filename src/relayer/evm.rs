@@ -5,12 +5,14 @@ use super::RelayerConfig;
 use crate::abis::axelar_gateway::AxelarGateway;
 use crate::relayer::types::ExecuteParam;
 use crate::relayer::types::ExecuteProof;
+use crate::types::Byte32;
 use crate::types::ContractCallFilter;
 use crate::HASH_SELECTOR_APPROVE_CONTRACT_CALL;
 use crate::OWNER_ADDRESS;
 use crate::SELECTOR_APPROVE_CONTRACT_CALL;
 use crate::SELECTOR_TRANSFER_OPERATORSHIP;
 use crate::TSS_ADDRESS;
+use anyhow::anyhow;
 use ethers::prelude::*;
 use ethers::utils::keccak256;
 use k256::ecdsa::{DerSignature, Signature};
@@ -65,7 +67,7 @@ impl EvmRelayerInner {
         }
         Ok(())
     }
-    pub async fn update_pubkey(&mut self, pubkey: Vec<u8>) -> anyhow::Result<()> {
+    pub async fn update_pubkey(&mut self, pubkey_hash: Byte32) -> anyhow::Result<()> {
         if let (Some(rpc_url), Some(contract_addr)) = (
             self.config.rpc_addr.as_ref(),
             self.config.call_contract.as_ref(),
@@ -74,28 +76,39 @@ impl EvmRelayerInner {
             let client = Arc::new(provider);
             let address: Address = contract_addr.parse()?;
             let contract = AxelarGateway::new(address, client);
-
-            //TransferOperatorShip is marked with onlySelf call.
-            // info!("pubkey 0x{}", hex::encode(pubkey.as_slice()));
-            // if pubkey.len() == 32 {
-            //     let p1: [u8; 32] = pubkey.try_into().unwrap();
-            // } else {
-            // }
-            //let caller = contract.transfer_operatorship(self.get_ownership_data(), p1);
+            info!(
+                "last 20 bytes of hash 0x{}",
+                hex::encode(&pubkey_hash[12..])
+            );
+            let tss_address: Address = hex::encode(&pubkey_hash[12..])
+                .parse()
+                .map_err(|err| anyhow!("Adress parser error {:?}", &err))?;
+            info!("Update new address for tss {:?}", tss_address.to_string());
+            //let caller = contract.transfer_operatorship(self.get_ownership_data(), pubkey_hash);
             //let res = caller.call().await;
             //Try call with execute function
-            // let execute_param = self
-            //     .config
-            //     .get_chain_id()
-            //     .map(|chain_id| {
-            //         let param = OwnerShipData::from(TSS_ADDRESS.clone()).into();
-            //         ExecuteData::from_command(chain_id, SELECTOR_TRANSFER_OPERATORSHIP, param)
-            //     })
-            //     .and_then(|data| {
-            //         ExecuteParam::from_tss_signature(data, TSS_ADDRESS.clone(), signature.clone())
-            //             .ok()
-            //     });
-            // info!("Update pubkey result {:?}", &res);
+            let execute_data = self.config.get_chain_id().map(|chain_id| {
+                let param = OwnerShipData::from(tss_address).into();
+                ExecuteData::from_command(chain_id, SELECTOR_TRANSFER_OPERATORSHIP, param)
+            });
+            if let Some(execute_data) = execute_data {
+                let proof = ExecuteProof::owner_sign(&execute_data).await;
+                let execute_param: Vec<u8> = ExecuteParam::new(execute_data, proof).into();
+                info!("Execute params 0x{}", hex::encode(execute_param.as_slice()));
+                match contract
+                    .execute(Bytes::from_iter(execute_param))
+                    .call()
+                    .await
+                {
+                    Ok(_) => {
+                        info!("Executed successfully");
+                    }
+                    Err(err) => {
+                        info!("Executed with error {:?}", err);
+                    }
+                }
+            }
+            info!("Update pubkey result {:?}", &res);
         }
         Ok(())
     }
@@ -224,9 +237,9 @@ impl EvmRelayer {
             internal: Arc::new(RwLock::new(inner)),
         }
     }
-    pub async fn update_pubkey(&self, pubkey: Vec<u8>) -> anyhow::Result<()> {
+    pub async fn update_pubkey(&self, pubkey_hash: Byte32) -> anyhow::Result<()> {
         let mut guard = self.internal.write().await;
-        guard.update_pubkey(pubkey).await
+        guard.update_pubkey(pubkey_hash).await
     }
     pub async fn call_destination_contract(
         &self,
