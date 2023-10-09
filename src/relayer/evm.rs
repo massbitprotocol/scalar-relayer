@@ -11,105 +11,109 @@ use crate::HASH_SELECTOR_APPROVE_CONTRACT_CALL;
 use crate::OWNER_ADDRESS;
 use crate::SELECTOR_APPROVE_CONTRACT_CALL;
 use crate::SELECTOR_TRANSFER_OPERATORSHIP;
-use crate::TSS_ADDRESS;
 use anyhow::anyhow;
 use ethers::prelude::*;
-use ethers::utils::keccak256;
 use k256::ecdsa::{DerSignature, Signature};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 pub struct EvmRelayerInner {
     config: RelayerConfig,
+    pubkey_hash: [u8; 32],
 }
 
 impl EvmRelayerInner {
     fn new(config: RelayerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            pubkey_hash: [0u8; 32],
+        }
     }
-    fn get_ownership_data(&self) -> Bytes {
-        let owner = OwnerShipData::from(TSS_ADDRESS.clone());
-        let data: Vec<u8> = owner.into();
-        info!("Ownership data 0x{}", hex::encode(data.as_slice()));
-        Bytes::from_iter(data)
+    pub fn get_chain_id(&self) -> Option<U256> {
+        self.config.get_chain_id()
     }
-    pub async fn update_ownership(&mut self) -> anyhow::Result<()> {
-        if let (Some(rpc_url), Some(contract_addr)) = (
-            self.config.rpc_addr.as_ref(),
-            self.config.call_contract.as_ref(),
-        ) {
-            let provider = Provider::<Http>::try_from(rpc_url)?;
-            let client = Arc::new(provider);
-            let address: Address = contract_addr.parse()?;
-            let contract = AxelarGateway::new(address, client);
+    // fn get_ownership_data(&self) -> Bytes {
+    //     let owner = OwnerShipData::from(TSS_ADDRESS.clone());
+    //     let data: Vec<u8> = owner.into();
+    //     info!("Ownership data 0x{}", hex::encode(data.as_slice()));
+    //     Bytes::from_iter(data)
+    // }
+    // pub async fn update_ownership(&mut self) -> anyhow::Result<()> {
+    //     if let (Some(rpc_url), Some(contract_addr)) = (
+    //         self.config.rpc_addr.as_ref(),
+    //         self.config.call_contract.as_ref(),
+    //     ) {
+    //         let provider = Provider::<Http>::try_from(rpc_url)?;
+    //         let client = Arc::new(provider);
+    //         let address: Address = contract_addr.parse()?;
+    //         let contract = AxelarGateway::new(address, client);
 
-            if let Some(execute_param) = self.config.get_chain_id().map(|chain_id| {
-                //Question? Which tss address put in here
-                let param = OwnerShipData::from(TSS_ADDRESS.clone()).into();
-                ExecuteData::from_command(chain_id, SELECTOR_TRANSFER_OPERATORSHIP, param)
-            }) {
-                let proof = ExecuteProof::owner_sign(&execute_param).await;
-                let execute_param: Vec<u8> = ExecuteParam::new(execute_param, proof).into();
-                info!("Execute params 0x{}", hex::encode(execute_param.as_slice()));
-                match contract
-                    .execute(Bytes::from_iter(execute_param))
-                    .call()
-                    .await
-                {
-                    Ok(_) => {
-                        info!("Executed successfully");
-                    }
-                    Err(err) => {
-                        info!("Executed with error {:?}", err);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
+    //         if let Some(execute_param) = self.config.get_chain_id().map(|chain_id| {
+    //             //Question? Which tss address put in here
+    //             let param = OwnerShipData::from(TSS_ADDRESS.clone()).into();
+    //             ExecuteData::from_command(chain_id, SELECTOR_TRANSFER_OPERATORSHIP, param)
+    //         }) {
+    //             let proof = ExecuteProof::owner_sign(&execute_param).await;
+    //             let execute_param: Vec<u8> = ExecuteParam::new(execute_param, proof).into();
+    //             info!("Execute params 0x{}", hex::encode(execute_param.as_slice()));
+    //             match contract
+    //                 .execute(Bytes::from_iter(execute_param))
+    //                 .call()
+    //                 .await
+    //             {
+    //                 Ok(_) => {
+    //                     info!("Executed successfully");
+    //                 }
+    //                 Err(err) => {
+    //                     info!("Executed with error {:?}", err);
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     Ok(())
+    // }
     pub async fn update_pubkey(&mut self, pubkey_hash: Byte32) -> anyhow::Result<()> {
-        if let (Some(rpc_url), Some(contract_addr)) = (
-            self.config.rpc_addr.as_ref(),
-            self.config.call_contract.as_ref(),
-        ) {
-            let provider = Provider::<Http>::try_from(rpc_url)?;
-            let client = Arc::new(provider);
-            let address: Address = contract_addr.parse()?;
-            let contract = AxelarGateway::new(address, client);
-            info!(
-                "last 20 bytes of hash 0x{}",
-                hex::encode(&pubkey_hash[12..])
-            );
-            let tss_address: Address = hex::encode(&pubkey_hash[12..])
-                .parse()
-                .map_err(|err| anyhow!("Adress parser error {:?}", &err))?;
-            info!("Update new address for tss {:?}", tss_address.to_string());
-            //let caller = contract.transfer_operatorship(self.get_ownership_data(), pubkey_hash);
-            //let res = caller.call().await;
-            //Try call with execute function
-            let execute_data = self.config.get_chain_id().map(|chain_id| {
-                let param = OwnerShipData::from(tss_address).into();
-                ExecuteData::from_command(chain_id, SELECTOR_TRANSFER_OPERATORSHIP, param)
-            });
-            if let Some(execute_data) = execute_data {
-                let proof = ExecuteProof::owner_sign(&execute_data).await;
-                let execute_param: Vec<u8> = ExecuteParam::new(execute_data, proof).into();
-                info!("Execute params 0x{}", hex::encode(execute_param.as_slice()));
-                match contract
-                    .execute(Bytes::from_iter(execute_param))
-                    .call()
-                    .await
-                {
-                    Ok(_) => {
-                        info!("Executed successfully");
-                    }
-                    Err(err) => {
-                        info!("Executed with error {:?}", err);
-                    }
+        self.pubkey_hash = pubkey_hash;
+        let rpc_url = self.config.rpc_addr.as_ref().unwrap().clone();
+        let contract_addr = self.config.call_contract.as_ref().unwrap().clone();
+        let provider = Provider::<Http>::try_from(rpc_url)?;
+        let client = Arc::new(provider);
+        let address: Address = contract_addr.parse()?;
+        let contract = AxelarGateway::new(address, client);
+        info!(
+            "last 20 bytes of hash 0x{}",
+            hex::encode(&self.pubkey_hash[12..])
+        );
+        let tss_address: Address = hex::encode(&self.pubkey_hash[12..])
+            .parse()
+            .map_err(|err| anyhow!("Adress parser error {:?}", &err))?;
+        info!("Update new address for tss {:?}", tss_address.to_string());
+        //let caller = contract.transfer_operatorship(self.get_ownership_data(), pubkey_hash);
+        //let res = caller.call().await;
+        //Try call with execute function
+        let execute_data = self.config.get_chain_id().map(|chain_id| {
+            let param = OwnerShipData::from(tss_address).into();
+            ExecuteData::from_command(chain_id, SELECTOR_TRANSFER_OPERATORSHIP, param)
+        });
+        if let Some(execute_data) = execute_data {
+            //Todo: This code work only for first epoch, from second epoch, use tss-signer instead of owner sign
+            let proof = ExecuteProof::owner_sign(&execute_data).await;
+            let execute_param: Vec<u8> = ExecuteParam::new(execute_data, proof).into();
+            info!("Execute params 0x{}", hex::encode(execute_param.as_slice()));
+            match contract
+                .execute(Bytes::from_iter(execute_param))
+                .call()
+                .await
+            {
+                Ok(_) => {
+                    info!("Executed successfully");
+                }
+                Err(err) => {
+                    info!("Executed with error {:?}", err);
                 }
             }
-            info!("Update pubkey result {:?}", &res);
         }
+
         Ok(())
     }
     pub async fn call_destination_contract(
@@ -193,8 +197,13 @@ impl EvmRelayerInner {
                     ExecuteData::new(chain_id, command_ids, commands, vec![payload.clone()])
                 })
                 .and_then(|data| {
-                    ExecuteParam::from_tss_signature(data, TSS_ADDRESS.clone(), signature.clone())
+                    hex::encode(&self.pubkey_hash[12..])
+                        .parse()
+                        .map_err(|err| anyhow!("Adress parser error {:?}", &err))
                         .ok()
+                        .map(|address| {
+                            ExecuteParam::from_rsv_signature(data, address, signature.clone())
+                        })
                 });
             if let Some(param) = execute_param {
                 let param_data: Vec<u8> = param.into();
@@ -237,18 +246,19 @@ impl EvmRelayer {
             internal: Arc::new(RwLock::new(inner)),
         }
     }
+    pub async fn get_chain_id(&self) -> Option<U256> {
+        self.internal.read().await.get_chain_id()
+    }
     pub async fn update_pubkey(&self, pubkey_hash: Byte32) -> anyhow::Result<()> {
         let mut guard = self.internal.write().await;
         guard.update_pubkey(pubkey_hash).await
     }
     pub async fn call_destination_contract(
         &self,
-        event_value: Vec<u8>,
+        payload: Vec<u8>,
         signature: Vec<u8>,
     ) -> anyhow::Result<()> {
         let mut guard = self.internal.write().await;
-        guard
-            .call_destination_contract(event_value, signature)
-            .await
+        guard.call_destination_contract(payload, signature).await
     }
 }

@@ -1,4 +1,4 @@
-use crate::relayer::EvmRelayer;
+use crate::relayer::ExecuteData;
 use anyhow::{anyhow, Result};
 use ethers::{abi::ethereum_types::Public, utils::keccak256};
 use futures::future::join_all;
@@ -10,14 +10,17 @@ use k256::{
     FieldBytes, PublicKey,
 };
 use scalar_relayer::config::parse_args;
+use scalar_relayer::grpc;
 use scalar_relayer::proto::scalar_abci_client::ScalarAbciClient;
-use scalar_relayer::relayer::{self, RelayerConfigs};
+use scalar_relayer::relayer::{self, EvmRelayer, RelayerConfig, RelayerConfigs};
 use scalar_relayer::types::ScalarEventTransaction;
 use scalar_relayer::types::{ContractCallFilter, ScalarOutgoingMessage};
-use scalar_relayer::{grpc, TSS_ADDRESS};
-use sha3::{Digest, Keccak256};
 use std::fs;
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use std::sync::Arc;
+use tokio::sync::{
+    mpsc::{self, UnboundedReceiver},
+    RwLock,
+};
 use tokio::task::JoinHandle;
 use tracing::{info, warn, Level};
 fn set_up_logs() {
@@ -110,20 +113,26 @@ fn spawn_sender(
     relayer_configs: RelayerConfigs,
     mut rx_out: UnboundedReceiver<ScalarOutgoingMessage>,
 ) -> JoinHandle<()> {
-    let tss_address = TSS_ADDRESS.clone();
-    info!("Tss_address {:#02x?}", &tss_address);
     tokio::spawn(async move {
-        let mut pub_key = vec![];
+        let evm_relayers: Vec<Arc<EvmRelayer>> = relayer_configs
+            .relayer_evm
+            .iter()
+            .filter(|item| {
+                item.start_with_bridge.unwrap_or(false)
+                    && item.rpc_addr.is_some()
+                    && item.call_contract.is_some()
+            })
+            .map(|relayer_config| Arc::new(EvmRelayer::new(relayer_config.clone())))
+            .collect();
         while let Some(item) = rx_out.recv().await {
             //let value = serde_json::to_string(&item).unwrap();
             //println!("Push block into stream {:?}", &value);
             match item {
                 ScalarOutgoingMessage::KeygenData(key) => {
-                    pub_key = key.clone();
-                    handle_keygen_data(&relayer_configs, key).await;
+                    handle_keygen_data(&evm_relayers, key).await;
                 }
                 ScalarOutgoingMessage::Transaction(tran) => {
-                    handle_transaction(&relayer_configs, pub_key.as_slice(), tran).await;
+                    handle_transaction(&evm_relayers, tran).await;
                 }
             }
         }
@@ -134,7 +143,7 @@ fn spawn_sender(
  * Need uncompress it before calculate hash for 20 bytes of ETH address
  */
 async fn handle_keygen_data(
-    relayer_configs: &RelayerConfigs,
+    evm_relayers: &Vec<Arc<EvmRelayer>>,
     pubkey: Vec<u8>,
 ) -> anyhow::Result<()> {
     // https://ethereum.org/en/developers/docs/accounts/#:~:text=The%20public%20key%20is%20generated,adding%200x%20to%20the%20beginning.
@@ -167,24 +176,20 @@ async fn handle_keygen_data(
         hex::encode(pubkey.as_slice()),
         hex::encode(&pubkey_hash)
     );
-    let handles = relayer_configs
-        .relayer_evm
-        .iter()
-        .find(|item| item.start_with_bridge.unwrap_or(false) && item.rpc_addr.is_some())
-        .map(|config| {
-            let config = config.clone();
-            tokio::spawn(async move {
-                let evm_relayer = EvmRelayer::new(config);
-                let res = evm_relayer.update_pubkey(pubkey_hash).await;
-            })
-        });
+
+    let handles = evm_relayers.iter().map(|relayer| {
+        let pubkey = pubkey_hash.clone();
+        let relayer = relayer.clone();
+        tokio::spawn(async move {
+            let _res = relayer.update_pubkey(pubkey).await;
+        })
+    });
     join_all(handles).await;
     Ok(())
 }
 
 async fn handle_transaction(
-    relayer_configs: &RelayerConfigs,
-    pubkey: &[u8],
+    evm_relayers: &Vec<Arc<EvmRelayer>>,
     message: String,
 ) -> anyhow::Result<()> {
     let ScalarEventTransaction {
@@ -199,20 +204,37 @@ async fn handle_transaction(
     //     k256::AffinePoint::from_encoded_point(&k256::EncodedPoint::from_bytes(pubkey).unwrap())
     //         .unwrap();
     let signature = k256::ecdsa::Signature::from_der(tss_signature.as_slice()).unwrap();
-    let mut sig_data: Vec<u8> = signature.to_vec();
+    let mut rsv_signature: Vec<u8> = signature.to_vec();
     // https://github.com/ethers-io/ethers.js/blob/v5.7/packages/bytes/src.ts/index.ts#L351
     // EIP-2098; pull the v from the top bit of s and clear it
-    let first_s = &mut sig_data[32];
+    let first_s = &mut rsv_signature[32];
     let v = 27 + (first_s.clone() >> 7);
     *first_s &= 0x7f;
-    sig_data.push(v);
+    rsv_signature.push(v);
     let payload_hash = keccak256(payload.as_slice()).to_vec();
     info!(
         "Hash 0x{}, origin signature 0x{}, rsv sig 0x{}",
         hex::encode(payload_hash.as_slice()),
         hex::encode(signature.to_bytes().as_slice()),
-        hex::encode(sig_data)
+        hex::encode(rsv_signature.as_slice())
     );
+    let execute_data = ExecuteData::try_from(payload.clone())?;
+    let chain_id = execute_data.get_chain_id().to_string();
+    for evm_relayer in evm_relayers.iter() {
+        if evm_relayer
+            .get_chain_id()
+            .await
+            .unwrap_or_default()
+            .to_string()
+            .as_str()
+            == chain_id.as_str()
+        {
+            evm_relayer
+                .call_destination_contract(payload, rsv_signature)
+                .await;
+            break;
+        }
+    }
 
     // assert!(pubkey
     //     .verify_prehashed(&FieldBytes::from_slice(payload_hash.as_slice()), &signature)
@@ -230,8 +252,7 @@ async fn handle_transaction(
     //     "Receive message {:?} with signature {:?} of length {:?}. Todo: Send it to the destination chain",
     //     &event_value, &tss_signature, tss_signature.len()
     // );
-    // //[48, 69, 2, 33, 0, 203, 84, 195, 47, 156, 83, 199, 231, 106, 54, 196, 67, 234, 18, 196, 66, 228, 133, 112, 120, 166, 233, 20, 53, 233, 18, 162, 219, 184, 100, 135, 190, 2, 32, 41, 211, 198, 193, 14, 127, 245, 90, 169, 218, 20, 59, 161, 1, 94, 96, 56, 192, 80, 198, 254, 180, 100, 181, 23, 68, 44, 69, 226, 224, 0, 118]
-    // // let destination_chain = event_value.destination_chain.clone();
+    // let destination_chain = event_value.destination_chain.clone();
     // if let Some(des_relayer_config) = relayer_configs.relayer_evm.iter().find(|item| {
     //     item.start_with_bridge.unwrap_or(false)
     //         && item.rpc_addr.is_some()

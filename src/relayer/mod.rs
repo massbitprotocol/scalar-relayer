@@ -2,9 +2,10 @@ use crate::proto::scalar_abci_response::Message;
 use crate::proto::{KeygenOutput, RequestArk, ScalarAbciResponse, ScalarOutTransaction};
 use crate::{SELECTOR_APPROVE_CONTRACT_CALL, SUPPORTED_CHAINS};
 mod evm;
-pub(super) mod types;
+mod types;
 use crate::proto::{scalar_abci_client::ScalarAbciClient, ScalarAbciRequest};
-use crate::relayer::types::{ApproveContractCallParam, ExecuteData};
+use crate::relayer::types::ApproveContractCallParam;
+
 use crate::types::ScalarOutgoingMessage;
 use crate::{
     abis::axelar_gateway::{AxelarGateway, AxelarGatewayEvents},
@@ -22,6 +23,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 use tonic::transport::Channel;
 use tracing::{info, warn};
+pub use types::*;
 pub const NAMESPACE: &str = "scalar";
 
 #[derive(Clone, Debug, Deserialize)]
@@ -41,7 +43,10 @@ pub struct RelayerConfig {
 impl RelayerConfig {
     pub fn get_chain_id(&self) -> Option<U256> {
         let name = self.name.to_ascii_lowercase();
-        SUPPORTED_CHAINS.get(name.as_str()).map(|id| id.clone())
+        SUPPORTED_CHAINS
+            .get(name.as_str())
+            .map(|id| id.clone())
+            .clone()
     }
 }
 pub trait Relayer {}

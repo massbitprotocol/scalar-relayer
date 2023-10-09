@@ -1,6 +1,5 @@
 #[macro_use]
 extern crate lazy_static;
-use std::env;
 pub mod abis;
 pub mod config;
 pub mod grpc;
@@ -40,13 +39,13 @@ lazy_static! {
             ("linea", U256::from(59144)),
         ])
     };
-    pub static ref TSS_ADDRESS: Address = {
-        let mut output = [0u8; 20];
-        let mut hasher = Keccak::v256();
-        hasher.update("scalar_tss_address".as_bytes());
-        hasher.finalize(&mut output);
-        Address::from_slice(&output)
-    };
+    // pub static ref TSS_ADDRESS: Address = {
+    //     let mut output = [0u8; 20];
+    //     let mut hasher = Keccak::v256();
+    //     hasher.update("scalar_tss_address".as_bytes());
+    //     hasher.finalize(&mut output);
+    //     Address::from_slice(&output)
+    // };
     static ref OWNER_ADDRESS: Address =
         Address::from_slice(
             Vec::from_hex("2F467c697798c24788086e327B0BFD25952105fe")
