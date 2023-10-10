@@ -2,7 +2,7 @@ use crate::{
     types::{Byte32, ContractCallFilter},
     OWNER_ADDRESS, OWNER_PRIVATE_KEY,
 };
-use anyhow::{anyhow};
+use anyhow::anyhow;
 use ethers::{
     abi::{Bytes, ParamType, Token},
     core::types::Signature,
@@ -109,10 +109,10 @@ impl Into<Vec<u8>> for ApproveContractCallParam {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecuteData {
-    chain_id: U256,
-    command_ids: Vec<Byte32>,
-    commands: Vec<String>,
-    params: Vec<Bytes>,
+    pub chain_id: U256,
+    pub command_ids: Vec<Byte32>,
+    pub commands: Vec<String>,
+    pub params: Vec<Bytes>,
 }
 impl ExecuteData {
     pub fn new(

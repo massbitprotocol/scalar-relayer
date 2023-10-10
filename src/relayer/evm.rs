@@ -4,6 +4,7 @@ use super::RelayerConfig;
 
 use crate::abis::axelar_gateway::AxelarGateway;
 use crate::create_rsv_signature;
+use crate::eth_hash_message;
 use crate::relayer::types::ExecuteParam;
 use crate::relayer::types::ExecuteProof;
 use crate::types::Byte32;
@@ -27,6 +28,7 @@ pub struct EvmRelayerInner {
     epoch: u64,
     pubkey: Vec<u8>,
     pubkey_hash: [u8; 32],
+    tss_address: Option<Address>,
     send_payloads: MapPayload,
 }
 
@@ -37,13 +39,14 @@ impl EvmRelayerInner {
             epoch: 0,
             pubkey: vec![],
             pubkey_hash: [0u8; 32],
+            tss_address: None,
             send_payloads: MapPayload::default(),
         }
     }
     pub fn get_chain_id(&self) -> Option<U256> {
         self.config.get_chain_id()
     }
-    pub fn sent_payload(&mut self, payload_hash: [u8; 32]) {
+    pub fn add_payload(&mut self, payload_hash: [u8; 32]) {
         self.send_payloads.insert(payload_hash, true);
     }
     // pub fn owner_call(&self) {
@@ -113,7 +116,7 @@ impl EvmRelayerInner {
         let provider = Provider::<Http>::try_from(rpc_url)?;
         let client = Arc::new(provider);
         let address: Address = contract_addr.parse()?;
-        let _contract = AxelarGateway::new(address, client);
+        let contract = AxelarGateway::new(address, client);
         info!(
             "last 20 bytes of hash 0x{}",
             hex::encode(&self.pubkey_hash[12..])
@@ -122,6 +125,7 @@ impl EvmRelayerInner {
             .parse()
             .map_err(|err| anyhow!("Adress parser error {:?}", &err))?;
         info!("Update new address for tss {:?}", tss_address.to_string());
+        self.tss_address = Some(tss_address.clone());
         let ownership_data = OwnerShipData::from(tss_address).into();
         //Call transfer_opratorship onlySelf method
         // let wallet: LocalWallet = OWNER_PRIVATE_KEY.parse().unwrap();
@@ -138,21 +142,21 @@ impl EvmRelayerInner {
             let proof = ExecuteProof::owner_sign(&execute_data).await;
             let execute_param: Vec<u8> = ExecuteParam::new(execute_data, proof).into();
             info!(
-                "Execute params of update pubkey call 0x{}",
+                "Execute params of update tss address call 0x{}",
                 hex::encode(execute_param.as_slice())
             );
-            // match contract
-            //     .execute(Bytes::from_iter(execute_param))
-            //     .call()
-            //     .await
-            // {
-            //     Ok(_) => {
-            //         info!("Executed successfully");
-            //     }
-            //     Err(err) => {
-            //         info!("Executed with error {:?}", err);
-            //     }
-            // }
+            match contract
+                .execute(Bytes::from_iter(execute_param))
+                .call()
+                .await
+            {
+                Ok(_) => {
+                    info!("Executed update tss address successfully");
+                }
+                Err(err) => {
+                    info!("Executed update tss address with error {:?}", err);
+                }
+            }
         }
 
         Ok(())
@@ -168,6 +172,8 @@ impl EvmRelayerInner {
         let recid = RecoveryId::try_from(v)?;
         let digest = Keccak256::new_with_prefix(payload);
         let recovered_key = VerifyingKey::recover_from_digest(digest, &signature, recid)?;
+        // let hash_payload = keccak256(payload);
+        // let recovered_key = VerifyingKey::recover_from_msg(&hash_payload, &signature, recid)?;
         info!("Verify public key");
         assert_eq!(recovered_key, expected_key);
         let _pub_key = PublicKey::from(recovered_key);
@@ -178,16 +184,16 @@ impl EvmRelayerInner {
         payload: Vec<u8>,
         signature: Signature,
     ) -> anyhow::Result<()> {
-        let payload_hash = keccak256(payload.as_slice());
+        let payload_hash = eth_hash_message(payload.as_slice());
         if self.send_payloads.contains_key(&payload_hash) {
             return Err(anyhow!("Payload already send to destination chain"));
         } else {
-            self.sent_payload(payload_hash);
+            self.add_payload(payload_hash);
         }
         let rpc_url = self.config.rpc_addr.as_ref().unwrap().clone();
         let contract_addr = self.config.call_contract.as_ref().unwrap().clone();
-        let verified = self.verify_signature(payload.as_slice(), &signature);
-        info!("Verify result {:?}", &verified);
+        //let verified = self.verify_signature(payload.as_slice(), &signature);
+        //info!("Verify result {:?}", &verified);
         let provider = Provider::<Http>::try_from(&rpc_url)?;
         let client = Arc::new(provider);
         let address: Address = contract_addr.parse()?;
@@ -203,7 +209,7 @@ impl EvmRelayerInner {
         //     source_event_index: U256::from(1),
         // };
         // let param_data: Vec<u8> = approve_call_param.into();
-        info!("Approve params 0x{}", hex::encode(payload.as_slice()));
+        // info!("Approve params 0x{}", hex::encode(payload.as_slice()));
         //info!("Approve params {:#02x?}", param_data);
         //let signature = DerSignature::try_from(signature.as_slice())?;
         //let signature = Signature::from_der(signature.as_slice());
@@ -252,28 +258,27 @@ impl EvmRelayerInner {
          */
         //Note: Only this function in Axelar gateway use validateProof
         //Payload is ExecuteData'serialized bytes
-        let execute_proof = hex::encode(&self.pubkey_hash[12..])
-            .parse()
-            .map_err(|err| anyhow!("Adress parser error {:?}", &err))
-            .ok()
-            .map(|address| {
-                let mut rsv_signature = signature.to_vec();
-                create_rsv_signature(&mut rsv_signature);
-                ExecuteProof::from_rsv_signature(address, rsv_signature)
-            });
+        let execute_proof = self.tss_address.as_ref().map(|address| {
+            let mut rsv_signature = signature.to_vec();
+            create_rsv_signature(&mut rsv_signature);
+            ExecuteProof::from_rsv_signature(address.clone(), rsv_signature)
+        });
 
         if let Some(proof) = execute_proof {
             let mut tokens = vec![];
             tokens.push(Token::Bytes(payload));
             tokens.push(Token::Bytes(proof.into()));
             let param_data = ethers::abi::encode(tokens.as_slice());
-            info!("Execute params 0x{}", hex::encode(param_data.as_slice()));
+            info!(
+                "Execute params for transaction 0x{}",
+                hex::encode(param_data.as_slice())
+            );
             match contract.execute(Bytes::from_iter(param_data)).call().await {
                 Ok(_) => {
-                    info!("Executed successfully");
+                    info!("Executed transaction successfully");
                 }
                 Err(err) => {
-                    info!("Executed with error {:?}", err);
+                    info!("Executed transaction with error {:?}", err);
                 }
             }
         }

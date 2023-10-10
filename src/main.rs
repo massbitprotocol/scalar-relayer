@@ -3,11 +3,11 @@ use anyhow::{anyhow, Result};
 use ethers::utils::keccak256;
 use futures::future::join_all;
 use scalar_relayer::config::parse_args;
-use scalar_relayer::grpc;
 use scalar_relayer::proto::scalar_abci_client::ScalarAbciClient;
 use scalar_relayer::relayer::{self, EvmRelayer, RelayerConfigs};
 use scalar_relayer::types::{ScalarEventTransaction, ScalarOutgoingMessage};
 use scalar_relayer::{create_rsv_signature, OWNER_PRIVATE_KEY};
+use scalar_relayer::{eth_hash_message, grpc};
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
@@ -203,10 +203,10 @@ async fn handle_transaction(
     let signature = k256::ecdsa::Signature::from_der(tss_signature.as_slice()).unwrap();
     let mut rsv_signature: Vec<u8> = signature.to_vec();
     create_rsv_signature(&mut rsv_signature);
-    let payload_hash = keccak256(payload.as_slice()).to_vec();
+    let payload_hash = eth_hash_message(payload.as_slice());
     info!(
         "Hash 0x{}, origin signature 0x{}, rsv sig 0x{}",
-        hex::encode(payload_hash.as_slice()),
+        hex::encode(&payload_hash),
         hex::encode(signature.to_bytes().as_slice()),
         hex::encode(rsv_signature.as_slice())
     );
