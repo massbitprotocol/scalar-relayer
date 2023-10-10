@@ -19,7 +19,7 @@ pub const SELECTOR_MINT_TOKEN: &str = "mintToken";
 pub const SELECTOR_APPROVE_CONTRACT_CALL: &str = "approveContractCall";
 pub const SELECTOR_APPROVE_CONTRACT_CALL_WITH_MINT: &str = "approveContractCallWithMint";
 pub const SELECTOR_TRANSFER_OPERATORSHIP: &str = "transferOperatorship";
-
+pub const ETH_PREFIX_HASH: &str = "\x19Ethereum Signed Message:\n32";
 lazy_static! {
     pub static ref OWNER_PRIVATE_KEY: String = {
         env::var("OWNER_PRIVATE_KEY").unwrap_or_default()
@@ -74,4 +74,12 @@ pub fn create_rsv_signature(signature: &mut Vec<u8>) {
         *first_s &= 0x7f;
         signature.push(v);
     }
+}
+
+pub fn eth_hash_message(message: &[u8]) -> [u8; 32] {
+    let hash = keccak256(message);
+    let mut eth_message = Vec::with_capacity(ETH_PREFIX_HASH.len() + hash.len());
+    eth_message.extend_from_slice(ETH_PREFIX_HASH.as_bytes());
+    eth_message.extend_from_slice(&hash);
+    keccak256(&eth_message)
 }

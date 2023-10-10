@@ -1,14 +1,7 @@
 use crate::relayer::ExecuteData;
 use anyhow::{anyhow, Result};
-use ethers::{abi::ethereum_types::Public, utils::keccak256};
+use ethers::utils::keccak256;
 use futures::future::join_all;
-use k256::elliptic_curve::group::GroupEncoding;
-use k256::{
-    ecdsa::{hazmat::VerifyPrimitive, RecoveryId, Signature, VerifyingKey},
-    elliptic_curve::{sec1::FromEncodedPoint, PrimeField},
-    pkcs8::EncodePublicKey,
-    FieldBytes, PublicKey,
-};
 use scalar_relayer::config::parse_args;
 use scalar_relayer::grpc;
 use scalar_relayer::proto::scalar_abci_client::ScalarAbciClient;
@@ -48,7 +41,7 @@ fn set_up_logs() {
 async fn main() -> Result<()> {
     set_up_logs();
     let private_key: String = OWNER_PRIVATE_KEY.clone();
-    info!("Private key {:?}", &private_key);
+    //info!("Private key {:?}", &private_key);
     let config = parse_args()?;
     let mut handles = vec![];
     let relayer_config_dir = config

@@ -74,15 +74,15 @@ pub struct ApproveContractCallParam {
     pub source_tx_hash: Byte32,
     pub source_event_index: U256,
 }
-impl From<ContractCallFilter> for ApproveContractCallParam {
-    fn from(value: ContractCallFilter) -> Self {
+impl From<(String, String, ContractCallFilter)> for ApproveContractCallParam {
+    fn from((chain, tran, value): (String, String, ContractCallFilter)) -> Self {
         let contract_address = value.destination_contract_address.parse().unwrap();
         Self {
-            source_chain: String::default(),
+            source_chain: chain,
             source_address: value.sender.to_string(),
             contract_address,
             payload_hash: value.payload_hash.clone(),
-            source_tx_hash: keccak256("Sometransaction"),
+            source_tx_hash: keccak256(tran.as_bytes()),
             source_event_index: U256::one(),
         }
     }
@@ -244,8 +244,9 @@ impl ExecuteProof {
     pub async fn owner_sign(data: &ExecuteData) -> Self {
         let bytes: Vec<u8> = data.clone().into();
         //let wallet: LocalWallet = OWNER_WALLET;
+        let hash = keccak256(bytes);
         let wallet: LocalWallet = OWNER_PRIVATE_KEY.parse().unwrap();
-        let signature: Signature = wallet.sign_message(bytes).await.unwrap();
+        let signature: Signature = wallet.sign_message(&hash).await.unwrap();
         Self {
             operators: vec![OWNER_ADDRESS.clone()],
             weights: vec![U256::one()],
