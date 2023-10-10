@@ -13,16 +13,14 @@ use scalar_relayer::config::parse_args;
 use scalar_relayer::grpc;
 use scalar_relayer::proto::scalar_abci_client::ScalarAbciClient;
 use scalar_relayer::relayer::{self, EvmRelayer, RelayerConfig, RelayerConfigs};
-use scalar_relayer::types::ScalarEventTransaction;
-use scalar_relayer::types::{ContractCallFilter, ScalarOutgoingMessage};
+use scalar_relayer::types::{ContractCallFilter, ScalarEventTransaction, ScalarOutgoingMessage};
+use scalar_relayer::{create_rsv_signature, OWNER_PRIVATE_KEY};
 use std::fs;
 use std::sync::Arc;
-use tokio::sync::{
-    mpsc::{self, UnboundedReceiver},
-    RwLock,
-};
+use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::task::JoinHandle;
 use tracing::{info, warn, Level};
+
 fn set_up_logs() {
     // enable only tofnd and tofn debug logs - disable serde, tonic, tokio, etc.
     // tracing_subscriber::fmt()
@@ -49,6 +47,8 @@ fn set_up_logs() {
 #[tokio::main]
 async fn main() -> Result<()> {
     set_up_logs();
+    let private_key: String = OWNER_PRIVATE_KEY.clone();
+    info!("Private key {:?}", &private_key);
     let config = parse_args()?;
     let mut handles = vec![];
     let relayer_config_dir = config
@@ -72,8 +72,18 @@ async fn main() -> Result<()> {
             .expect(format!("Failed to read relayer config file {}", config_path).as_str());
         let relayer_configs: RelayerConfigs = toml::from_str(config_str.as_str())?;
         //info!("RelayerConfigs {:?}", &relayer_configs);
+        let evm_relayers: Vec<Arc<EvmRelayer>> = relayer_configs
+            .relayer_evm
+            .iter()
+            .filter(|item| {
+                item.start_with_bridge.unwrap_or(false)
+                    && item.rpc_addr.is_some()
+                    && item.call_contract.is_some()
+            })
+            .map(|relayer_config| Arc::new(EvmRelayer::new(relayer_config.clone())))
+            .collect();
         let (tx_out, rx_out) = mpsc::unbounded_channel::<ScalarOutgoingMessage>();
-        let sender_handle = spawn_sender(relayer_configs.clone(), rx_out);
+        let sender_handle = spawn_sender(evm_relayers.clone(), rx_out);
         handles.push(sender_handle);
 
         let relayer_handles = relayer_configs
@@ -110,26 +120,16 @@ async fn main() -> Result<()> {
 }
 
 fn spawn_sender(
-    relayer_configs: RelayerConfigs,
+    evm_relayers: Vec<Arc<EvmRelayer>>,
     mut rx_out: UnboundedReceiver<ScalarOutgoingMessage>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let evm_relayers: Vec<Arc<EvmRelayer>> = relayer_configs
-            .relayer_evm
-            .iter()
-            .filter(|item| {
-                item.start_with_bridge.unwrap_or(false)
-                    && item.rpc_addr.is_some()
-                    && item.call_contract.is_some()
-            })
-            .map(|relayer_config| Arc::new(EvmRelayer::new(relayer_config.clone())))
-            .collect();
         while let Some(item) = rx_out.recv().await {
             //let value = serde_json::to_string(&item).unwrap();
             //println!("Push block into stream {:?}", &value);
             match item {
-                ScalarOutgoingMessage::KeygenData(key) => {
-                    handle_keygen_data(&evm_relayers, key).await;
+                ScalarOutgoingMessage::KeygenData((epoch, pubkey)) => {
+                    handle_keygen_data(&evm_relayers, epoch, pubkey).await;
                 }
                 ScalarOutgoingMessage::Transaction(tran) => {
                     handle_transaction(&evm_relayers, tran).await;
@@ -144,6 +144,7 @@ fn spawn_sender(
  */
 async fn handle_keygen_data(
     evm_relayers: &Vec<Arc<EvmRelayer>>,
+    epoch: u64,
     pubkey: Vec<u8>,
 ) -> anyhow::Result<()> {
     // https://ethereum.org/en/developers/docs/accounts/#:~:text=The%20public%20key%20is%20generated,adding%200x%20to%20the%20beginning.
@@ -178,10 +179,13 @@ async fn handle_keygen_data(
     );
 
     let handles = evm_relayers.iter().map(|relayer| {
-        let pubkey = pubkey_hash.clone();
+        let key = pubkey.clone();
+        let hash = pubkey_hash.clone();
         let relayer = relayer.clone();
         tokio::spawn(async move {
-            let _res = relayer.update_pubkey(pubkey).await;
+            if let Err(err) = relayer.update_pubkey(epoch, key, hash).await {
+                warn!("Update pubkey error {:?}", &err);
+            }
         })
     });
     join_all(handles).await;
@@ -205,12 +209,7 @@ async fn handle_transaction(
     //         .unwrap();
     let signature = k256::ecdsa::Signature::from_der(tss_signature.as_slice()).unwrap();
     let mut rsv_signature: Vec<u8> = signature.to_vec();
-    // https://github.com/ethers-io/ethers.js/blob/v5.7/packages/bytes/src.ts/index.ts#L351
-    // EIP-2098; pull the v from the top bit of s and clear it
-    let first_s = &mut rsv_signature[32];
-    let v = 27 + (first_s.clone() >> 7);
-    *first_s &= 0x7f;
-    rsv_signature.push(v);
+    create_rsv_signature(&mut rsv_signature);
     let payload_hash = keccak256(payload.as_slice()).to_vec();
     info!(
         "Hash 0x{}, origin signature 0x{}, rsv sig 0x{}",
@@ -229,9 +228,12 @@ async fn handle_transaction(
             .as_str()
             == chain_id.as_str()
         {
-            evm_relayer
-                .call_destination_contract(payload, rsv_signature)
-                .await;
+            if let Err(err) = evm_relayer
+                .call_destination_contract(payload, signature)
+                .await
+            {
+                warn!("Call destination contract error {:?}", &err);
+            }
             break;
         }
     }

@@ -12,6 +12,7 @@ use ethers::{
 };
 use k256::ecdsa::DerSignature;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 pub struct OwnerShipData {
     operators: Vec<Address>,
     weights: Vec<U256>,

@@ -191,9 +191,12 @@ pub async fn start_listener(
                             info!("Send message to the relayer: `{}`", &message);
                             let _ = tx.send(ScalarOutgoingMessage::Transaction(message));
                         }
-                        Some(Message::Keygen(KeygenOutput { pub_key })) => {
-                            info!("Send new tss - pubkey to the relayers: {:?}", &pub_key);
-                            let _ = tx.send(ScalarOutgoingMessage::KeygenData(pub_key));
+                        Some(Message::Keygen(KeygenOutput { epoch, pub_key })) => {
+                            info!(
+                                "Send new tss - pubkey at the epoch {} to the relayers: {:?}",
+                                epoch, &pub_key
+                            );
+                            let _ = tx.send(ScalarOutgoingMessage::KeygenData((epoch, pub_key)));
                         }
                         None => {}
                     }

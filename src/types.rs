@@ -55,5 +55,5 @@ pub struct ScalarEventTransaction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ScalarOutgoingMessage {
     Transaction(String),
-    KeygenData(Vec<u8>),
+    KeygenData((u64, Vec<u8>)),
 }

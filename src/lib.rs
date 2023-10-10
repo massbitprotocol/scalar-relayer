@@ -21,7 +21,7 @@ pub const SELECTOR_APPROVE_CONTRACT_CALL_WITH_MINT: &str = "approveContractCallW
 pub const SELECTOR_TRANSFER_OPERATORSHIP: &str = "transferOperatorship";
 
 lazy_static! {
-    static ref OWNER_PRIVATE_KEY: String = {
+    pub static ref OWNER_PRIVATE_KEY: String = {
         env::var("OWNER_PRIVATE_KEY").unwrap_or_default()
     };
 
@@ -61,4 +61,17 @@ lazy_static! {
         keccak256("approveContractCallWithMint");
     static ref HASH_SELECTOR_TRANSFER_OPERATORSHIP: [u8; 32] =
         keccak256("transferOperatorship");
+}
+
+// https://github.com/ethers-io/ethers.js/blob/v5.7/packages/bytes/src.ts/index.ts#L351
+// EIP-2098; pull the v from the top bit of s and clear it
+pub fn create_rsv_signature(signature: &mut Vec<u8>) {
+    if signature.len() == 64 {
+        // https://github.com/ethers-io/ethers.js/blob/v5.7/packages/bytes/src.ts/index.ts#L351
+        // EIP-2098; pull the v from the top bit of s and clear it
+        let first_s = &mut signature[32];
+        let v = 27 + (first_s.clone() >> 7);
+        *first_s &= 0x7f;
+        signature.push(v);
+    }
 }
