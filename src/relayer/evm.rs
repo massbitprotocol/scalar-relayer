@@ -1,4 +1,3 @@
-
 use super::types::ExecuteData;
 use super::types::OwnerShipData;
 use super::RelayerConfig;
@@ -8,10 +7,6 @@ use crate::create_rsv_signature;
 use crate::relayer::types::ExecuteParam;
 use crate::relayer::types::ExecuteProof;
 use crate::types::Byte32;
-
-
-
-
 
 use crate::SELECTOR_TRANSFER_OPERATORSHIP;
 use anyhow::anyhow;
@@ -282,19 +277,6 @@ impl EvmRelayerInner {
                 }
             }
         }
-        // let contract_call = contract.call_contract(
-        //     event_value.destination_chain.clone(),
-        //     event_value.destination_contract_address.clone(),
-        //     event_value.payload.clone(),
-        // );
-        // match contract_call.call().await {
-        //     Ok(_) => {
-        //         info!("Contract call successfulled");
-        //     }
-        //     Err(e) => {
-        //         info!("Contract call error {:?}", e);
-        //     }
-        // }
         Ok(())
     }
 }
