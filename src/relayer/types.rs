@@ -1,18 +1,18 @@
 use crate::{
     types::{Byte32, ContractCallFilter},
-    OWNER_ADDRESS, OWNER_PRIVATE_KEY, SELECTOR_APPROVE_CONTRACT_CALL,
+    OWNER_ADDRESS, OWNER_PRIVATE_KEY,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow};
 use ethers::{
     abi::{Bytes, ParamType, Token},
     core::types::Signature,
     signers::{LocalWallet, Signer},
-    types::{Address, Sign, U256},
+    types::{Address, U256},
     utils::keccak256,
 };
-use k256::ecdsa::DerSignature;
+
 use serde::{Deserialize, Serialize};
-use tracing::info;
+
 pub struct OwnerShipData {
     operators: Vec<Address>,
     weights: Vec<U256>,

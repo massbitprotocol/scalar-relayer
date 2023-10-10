@@ -6,12 +6,12 @@ pub mod grpc;
 pub mod proto;
 pub mod relayer;
 pub mod types;
-use ethers::signers::LocalWallet;
+
 use ethers::types::{Address, U256};
 use ethers::utils::{hex::FromHex, keccak256};
 use std::collections::HashMap;
 use std::env;
-use tiny_keccak::{Hasher, Keccak};
+
 // pub const TSS_ADDRESS: &str = "scalar_tss_address";
 pub const SELECTOR_BURN_TOKEN: &str = "burnToken";
 pub const SELECTOR_DEPLOY_TOKEN: &str = "deployToken";

@@ -5,8 +5,8 @@ use futures::future::join_all;
 use scalar_relayer::config::parse_args;
 use scalar_relayer::grpc;
 use scalar_relayer::proto::scalar_abci_client::ScalarAbciClient;
-use scalar_relayer::relayer::{self, EvmRelayer, RelayerConfig, RelayerConfigs};
-use scalar_relayer::types::{ContractCallFilter, ScalarEventTransaction, ScalarOutgoingMessage};
+use scalar_relayer::relayer::{self, EvmRelayer, RelayerConfigs};
+use scalar_relayer::types::{ScalarEventTransaction, ScalarOutgoingMessage};
 use scalar_relayer::{create_rsv_signature, OWNER_PRIVATE_KEY};
 use std::fs;
 use std::sync::Arc;
@@ -40,7 +40,7 @@ fn set_up_logs() {
 #[tokio::main]
 async fn main() -> Result<()> {
     set_up_logs();
-    let private_key: String = OWNER_PRIVATE_KEY.clone();
+    let _private_key: String = OWNER_PRIVATE_KEY.clone();
     //info!("Private key {:?}", &private_key);
     let config = parse_args()?;
     let mut handles = vec![];

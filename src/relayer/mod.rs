@@ -8,7 +8,7 @@ use crate::relayer::types::ApproveContractCallParam;
 
 use crate::types::ScalarOutgoingMessage;
 use crate::{
-    abis::axelar_gateway::{AxelarGateway, AxelarGatewayEvents},
+    abis::axelar_gateway::{AxelarGateway},
     types::ContractCallFilter,
 };
 use anyhow::anyhow;
@@ -72,11 +72,11 @@ pub async fn start_listener(
         info!("Call contract {:?}", &address);
         let (tx_external_event, mut rx_external_event) = mpsc::unbounded_channel::<Vec<u8>>();
         let mut handles: Vec<JoinHandle<Result<(), anyhow::Error>>> = Vec::new();
-        let chain_id_clone = chain_id.clone();
+        let _chain_id_clone = chain_id.clone();
         let listener_handle: JoinHandle<Result<(), _>> = tokio::spawn(async move {
             let gateway = AxelarGateway::new(address, client.clone());
             let events = gateway.events().from_block(9794376);
-            let stream = events
+            let _stream = events
                 .stream()
                 .await
                 .map_err(|e| Err::<(), anyhow::Error>(anyhow!("{:?}", e)))
@@ -123,7 +123,7 @@ pub async fn start_listener(
                     );
                     info!("Init AxelarGateway event {:?}", &execute_data);
                     let message: Vec<u8> = execute_data.into();
-                    let res = tx_external_event.send(message);
+                    let _res = tx_external_event.send(message);
                 }
                 sleep(duration).await;
             }

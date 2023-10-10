@@ -1,24 +1,24 @@
-use super::types::ApproveContractCallParam;
+
 use super::types::ExecuteData;
 use super::types::OwnerShipData;
 use super::RelayerConfig;
-use crate::abis::axelar_gateway::AdminsReturn;
+
 use crate::abis::axelar_gateway::AxelarGateway;
 use crate::create_rsv_signature;
 use crate::relayer::types::ExecuteParam;
 use crate::relayer::types::ExecuteProof;
 use crate::types::Byte32;
-use crate::types::ContractCallFilter;
-use crate::HASH_SELECTOR_APPROVE_CONTRACT_CALL;
-use crate::OWNER_ADDRESS;
-use crate::OWNER_PRIVATE_KEY;
-use crate::SELECTOR_APPROVE_CONTRACT_CALL;
+
+
+
+
+
 use crate::SELECTOR_TRANSFER_OPERATORSHIP;
 use anyhow::anyhow;
 use ethers::abi::Token;
 use ethers::prelude::*;
 use ethers::utils::keccak256;
-use k256::ecdsa::{DerSignature, RecoveryId, Signature, VerifyingKey};
+use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use k256::PublicKey;
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
@@ -118,7 +118,7 @@ impl EvmRelayerInner {
         let provider = Provider::<Http>::try_from(rpc_url)?;
         let client = Arc::new(provider);
         let address: Address = contract_addr.parse()?;
-        let contract = AxelarGateway::new(address, client);
+        let _contract = AxelarGateway::new(address, client);
         info!(
             "last 20 bytes of hash 0x{}",
             hex::encode(&self.pubkey_hash[12..])
