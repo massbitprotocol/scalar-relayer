@@ -78,35 +78,25 @@ async fn main() -> Result<()> {
         let (tx_out, rx_out) = mpsc::unbounded_channel::<ScalarOutgoingMessage>();
         let sender_handle = spawn_sender(evm_relayers.clone(), rx_out);
         handles.push(sender_handle);
-
-        let relayer_handles = relayer_configs
-            .relayer_evm
-            .iter()
-            .filter(|item| item.start_with_bridge.unwrap_or(false))
-            .map(|relayer_config| {
-                info!("Start relayer with config {:?}", &relayer_config);
-                let gprc_url = format!(
-                    "{}:{}",
-                    config.grpc_host.as_ref().unwrap(),
-                    config.grpc_port.as_ref().unwrap() + ind
-                );
-                warn!("Narwhal Grpc server {:?}", &gprc_url);
+        info!("Start relayer with config {:?}", &relayer_config);
+        let gprc_url = format!(
+            "{}:{}",
+            config.grpc_host.as_ref().unwrap(),
+            config.grpc_port.as_ref().unwrap() + ind
+        );
+        warn!("Narwhal Grpc server {:?}", &gprc_url);
+        if let Ok(client) = ScalarAbciClient::connect(gprc).await {
+            let relayer_handles = evm_relayers.into_iter().map(|relayer| {
                 let tx = tx_out.clone();
-                let relayer_config = relayer_config.clone();
-                let handle = tokio::spawn(async move {
-                    let client = ScalarAbciClient::connect(gprc_url).await.ok();
-                    if client.is_none() {
-                        warn!("Cannot connect to narwhal grpc!");
-                    } else {
-                        info!("Connected to narwhal grpc!");
-                    }
-                    //let _ = relayer::start(relayer_config, client, tx).await;
-                    let _ = relayer::start_listener(relayer_config, client, tx).await;
-                });
-                handle
+                tokio::spawn(async move {
+                    let _ = relayer::start_listener(client, tx).await;
+                })
             });
 
-        handles.extend(relayer_handles);
+            handles.extend(relayer_handles);
+        } else {
+            warn!("Cannot connect to narwhal grpc!");
+        }
     }
     join_all(handles).await;
     Ok(())

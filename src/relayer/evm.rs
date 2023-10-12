@@ -6,6 +6,7 @@ use crate::abis::AxelarExecutable;
 use crate::abis::ScalarGateway;
 use crate::create_rsv_signature;
 use crate::eth_hash_message;
+use crate::proto::scalar_abci_client::ScalarAbciClient;
 use crate::relayer::types::ApproveContractCallParam;
 use crate::relayer::types::ExecuteParam;
 use crate::relayer::types::ExecuteProof;
@@ -20,7 +21,9 @@ use k256::PublicKey;
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
+use tonic::transport::Channel;
 use tracing::info;
 
 pub type MapPayload = HashMap<[u8; 32], bool>;
@@ -43,6 +46,9 @@ impl EvmRelayerInner {
             tss_address: None,
             send_payloads: MapPayload::default(),
         }
+    }
+    pub fn get_config_infos(&self) -> Option<(U256, String, String, String, String)> {
+        self.config.zip()
     }
     pub fn get_chain_id(&self) -> Option<U256> {
         self.config.get_chain_id()
@@ -278,9 +284,11 @@ impl EvmRelayer {
             internal: Arc::new(RwLock::new(inner)),
         }
     }
-    pub async fn get_chain_id(&self) -> Option<U256> {
-        self.internal.read().await.get_chain_id()
+    //Return (ws_url, )
+    pub async fn get_config_infos(&self) -> Option<(U256, String, String, String, String)> {
+        self.internal.read().await.get_config_infos()
     }
+
     pub async fn update_pubkey(
         &self,
         epoch: u64,

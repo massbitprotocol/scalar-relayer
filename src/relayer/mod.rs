@@ -45,31 +45,47 @@ impl RelayerConfig {
             .map(|id| id.clone())
             .clone()
     }
+    //Return tuple of chain_id, chain_name, rpc_addr, ws_addr and contract_addr
+    pub fn zip(&self) -> Option<(U256, String, String, String, String)> {
+        let name = self.name.to_ascii_lowercase();
+        if let (Some(chain_id), Some(rpc_addr), Some(ws_addr), Some(contract_addr)) = (
+            SUPPORTED_CHAINS.get(name.as_str()),
+            self.rpc_addr.as_ref(),
+            self.ws_addr.as_ref(),
+            self.call_contract.as_ref(),
+        ) {
+            Some((
+                chain_id.clone(),
+                self.name.clone(),
+                rpc_addr.clone(),
+                ws_addr.clone(),
+                contract_addr.clone(),
+            ))
+        } else {
+            None
+        }
+    }
 }
 pub trait Relayer {}
 
 pub async fn start_listener(
-    config: RelayerConfig,
+    relayer: Arc<EvmRelayer>,
     grpc_client: Option<ScalarAbciClient<Channel>>,
     tx: mpsc::UnboundedSender<ScalarOutgoingMessage>,
 ) -> anyhow::Result<()> {
     //let handle = tokio::spawn(async move {});
-    if let (Some(url), Some(call_contract), Some(chain_id)) = (
-        config.ws_addr.as_ref(),
-        config.call_contract.as_ref(),
-        config.get_chain_id(),
-    ) {
-        info!("Start relayer with websocket url {:?}", url);
-        let provider = Provider::<Ws>::connect(url.as_str())
+    let config = relayer.get_config_infos().await;
+    if let Some((chain_id, chain_name, rpc_addr, ws_addr, contract_addr)) = config {
+        info!("Start relayer with websocket url {:?}", ws_addr);
+        let provider = Provider::<Ws>::connect(ws_addr.as_str())
             .await
-            .expect(format!("Cannot connect to rpc url {:?}", url.as_str()).as_str());
-        info!("Connected to websocket {:?} successfully", url.as_str());
+            .expect(format!("Cannot connect to rpc url {:?}", ws_addr.as_str()).as_str());
+        info!("Connected to websocket {:?} successfully", ws_addr.as_str());
         let client = Arc::new(provider);
-        let address: Address = call_contract.parse()?;
+        let address: Address = contract_addr.parse()?;
         info!("Call contract {:?}", &address);
         let (tx_external_event, mut rx_external_event) = mpsc::unbounded_channel::<Vec<u8>>();
         let mut handles: Vec<JoinHandle<Result<(), anyhow::Error>>> = Vec::new();
-        let _chain_id_clone = chain_id.clone();
         let listener_handle: JoinHandle<Result<(), _>> = tokio::spawn(async move {
             let gateway = ScalarGateway::new(address, client.clone());
             let events = gateway.events().from_block(9794376);
@@ -87,7 +103,7 @@ pub async fn start_listener(
                         .unwrap()
                         .as_slice(),
                 ),
-                destination_chain: config.name.clone(),
+                destination_chain: "goerli".to_owned(),
                 destination_contract_address: "0xdC4A108e0CB62C22931209e8DEEBBaA495226700"
                     .to_owned(),
                 payload_hash: [
@@ -101,7 +117,7 @@ pub async fn start_listener(
             let duration = Duration::from_millis(180_000);
             loop {
                 let approve_contract_param: Vec<u8> = ApproveContractCallParam::from((
-                    config.name.clone(),
+                    chain_name.clone(),
                     "transactionhash".to_string(),
                     event_value.clone(),
                 ))
