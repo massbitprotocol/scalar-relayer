@@ -10,9 +10,9 @@ use ethers::{
     types::{Address, U256},
     utils::keccak256,
 };
-
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-
+use uuid::Uuid;
 pub struct OwnerShipData {
     operators: Vec<Address>,
     weights: Vec<U256>,
@@ -69,6 +69,7 @@ impl Into<Vec<u8>> for OwnerShipData {
 pub struct ApproveContractCallParam {
     pub source_chain: String,
     pub source_address: String,
+    //Destination address
     pub contract_address: Address,
     pub payload_hash: Byte32,
     pub source_tx_hash: Byte32,
@@ -107,6 +108,50 @@ impl Into<Vec<u8>> for ApproveContractCallParam {
         ethers::abi::encode(tokens.as_slice())
     }
 }
+
+impl TryFrom<&[u8]> for ApproveContractCallParam {
+    type Error = anyhow::Error;
+    fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
+        let mut params = vec![];
+        //source_chain
+        params.push(ParamType::String);
+        //source_address,
+        params.push(ParamType::String);
+        //destination contract_address
+        params.push(ParamType::Address);
+        //payload_hash
+        params.push(ParamType::FixedBytes(32));
+        //source_tx_hash
+        params.push(ParamType::FixedBytes(32));
+        //source_event_index
+        params.push(ParamType::Uint(32));
+
+        let mut tokens = ethers::abi::decode(params.as_slice(), value)
+            .map_err(|err| anyhow!("Decode error {:?}", &err))?;
+        assert_eq!(tokens.len(), 6);
+        if let Some((
+            Token::String(source_chain),
+            Token::String(source_address),
+            Token::Address(contract_address),
+            Token::FixedBytes(payload_hash),
+            Token::FixedBytes(source_tx_hash),
+            Token::Uint(source_event_index),
+        )) = tokens.into_iter().tuples().next()
+        {
+            Ok(ApproveContractCallParam {
+                source_chain,
+                source_address,
+                contract_address,
+                payload_hash: payload_hash.try_into().unwrap(),
+                source_tx_hash: source_tx_hash.try_into().unwrap(),
+                source_event_index,
+            })
+        } else {
+            Err(anyhow!("Cannot deserialize ApproveContractCallParam"))
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecuteData {
     pub chain_id: U256,
@@ -129,11 +174,11 @@ impl ExecuteData {
         }
     }
     pub fn from_command(chain_id: U256, command: &str, param: Bytes) -> Self {
-        let command = String::from(command);
+        let uuid = Uuid::new_v4();
         Self {
             chain_id,
-            command_ids: vec![keccak256(command.as_bytes())],
-            commands: vec![command],
+            command_ids: vec![keccak256(uuid.as_bytes())],
+            commands: vec![String::from(command)],
             params: vec![param],
         }
     }
@@ -144,9 +189,9 @@ impl ExecuteData {
         self.chain_id.clone()
     }
 }
-impl TryFrom<Vec<u8>> for ExecuteData {
+impl TryFrom<&[u8]> for ExecuteData {
     type Error = anyhow::Error;
-    fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
         let mut params = vec![];
         //ChainID
         params.push(ParamType::Uint(32));
@@ -156,19 +201,15 @@ impl TryFrom<Vec<u8>> for ExecuteData {
         params.push(ParamType::Array(Box::new(ParamType::String)));
         //Params
         params.push(ParamType::Array(Box::new(ParamType::Bytes)));
-        let mut tokens = ethers::abi::decode(params.as_slice(), value.as_slice())
+        let mut tokens = ethers::abi::decode(params.as_slice(), value)
             .map_err(|err| anyhow!("Decode error {:?}", &err))?;
         assert_eq!(tokens.len(), 4);
-        let params = tokens.pop().unwrap();
-        let commands = tokens.pop().unwrap();
-        let command_ids = tokens.pop().unwrap();
-        let chain_id = tokens.pop().unwrap();
-        if let (
+        if let Some((
             Token::Uint(chain_id),
             Token::Array(command_ids),
             Token::Array(commands),
             Token::Array(params),
-        ) = (chain_id, command_ids, commands, params)
+        )) = tokens.into_iter().tuples().next()
         {
             let command_ids = command_ids
                 .into_iter()

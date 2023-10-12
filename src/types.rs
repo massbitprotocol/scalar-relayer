@@ -1,4 +1,4 @@
-use crate::abis::axelar_gateway;
+use crate::abis;
 use ethers::types::{Bytes, H160};
 use serde::{Deserialize, Serialize};
 pub type Byte32 = [u8; 32];
@@ -27,9 +27,9 @@ pub enum ScalarGatewayEvents {
     // UpgradedFilter(UpgradedFilter),
 }
 
-impl From<axelar_gateway::ContractCallFilter> for ContractCallFilter {
-    fn from(value: axelar_gateway::ContractCallFilter) -> Self {
-        let axelar_gateway::ContractCallFilter {
+impl From<abis::ContractCallFilter> for ContractCallFilter {
+    fn from(value: abis::ContractCallFilter) -> Self {
+        let abis::ContractCallFilter {
             sender,
             destination_chain,
             destination_contract_address,

@@ -2,13 +2,26 @@ use std::io::Error;
 
 use ethers::prelude::Abigen;
 use ethers_solc::utils;
-const SMART_CONTRACT_PATH: &str = "./solidity/artifacts/contracts";
+const SMART_CONTRACT_PATH: &str = "./solidity/artifacts";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     build_proto().expect("Failed to compile proto(s)");
-    abi_generator("AxelarAuthWeighted", "axelar_auth_weighted.rs", "/auth")?;
-    abi_generator("AxelarGateway", "axelar_gateway.rs", "")?;
-    abi_generator("AxelarGatewayProxy", "axelar_gateway_proxy.rs", "")?;
+    abi_generator(
+        "ScalarAuthWeighted",
+        "scalar_auth_weighted.rs",
+        "/contracts/auth",
+    )?;
+    abi_generator("ScalarGateway", "scalar_gateway.rs", "/contracts")?;
+    abi_generator(
+        "ScalarGatewayProxy",
+        "scalar_gateway_proxy.rs",
+        "/contracts",
+    )?;
+    abi_generator(
+        "AxelarExecutable",
+        "axelar_executable.rs",
+        "/@axelar-network/axelar-gmp-sdk-solidity/contracts/executable",
+    )?;
     // match abi_generator("ExecutableSample", "executable_sample.rs") {
     //     Ok(_) => {
     //         println!("Generate abis successfully");

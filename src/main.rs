@@ -210,7 +210,7 @@ async fn handle_transaction(
         hex::encode(signature.to_bytes().as_slice()),
         hex::encode(rsv_signature.as_slice())
     );
-    let execute_data = ExecuteData::try_from(payload.clone())?;
+    let execute_data = ExecuteData::try_from(payload.as_slice())?;
     let chain_id = execute_data.get_chain_id().to_string();
     for evm_relayer in evm_relayers.iter() {
         if evm_relayer

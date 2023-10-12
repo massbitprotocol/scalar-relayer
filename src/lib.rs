@@ -12,7 +12,6 @@ use ethers::utils::{hex::FromHex, keccak256};
 use std::collections::HashMap;
 use std::env;
 
-// pub const TSS_ADDRESS: &str = "scalar_tss_address";
 pub const SELECTOR_BURN_TOKEN: &str = "burnToken";
 pub const SELECTOR_DEPLOY_TOKEN: &str = "deployToken";
 pub const SELECTOR_MINT_TOKEN: &str = "mintToken";

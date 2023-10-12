@@ -2773,6 +2773,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
+ "itertools 0.11.0",
  "k256",
  "lazy_static",
  "prost",
@@ -2793,6 +2794,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-subscriber",
+ "uuid 1.4.1",
 ]
 
 [[package]]

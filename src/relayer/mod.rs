@@ -7,10 +7,7 @@ use crate::proto::{scalar_abci_client::ScalarAbciClient, ScalarAbciRequest};
 use crate::relayer::types::ApproveContractCallParam;
 
 use crate::types::ScalarOutgoingMessage;
-use crate::{
-    abis::axelar_gateway::{AxelarGateway},
-    types::ContractCallFilter,
-};
+use crate::{abis::ScalarGateway, types::ContractCallFilter};
 use anyhow::anyhow;
 use ethers::prelude::*;
 use ethers::utils::hex::FromHex;
@@ -74,7 +71,7 @@ pub async fn start_listener(
         let mut handles: Vec<JoinHandle<Result<(), anyhow::Error>>> = Vec::new();
         let _chain_id_clone = chain_id.clone();
         let listener_handle: JoinHandle<Result<(), _>> = tokio::spawn(async move {
-            let gateway = AxelarGateway::new(address, client.clone());
+            let gateway = ScalarGateway::new(address, client.clone());
             let events = gateway.events().from_block(9794376);
             let _stream = events
                 .stream()
@@ -86,12 +83,12 @@ pub async fn start_listener(
             // info!("{:?}", bytes);
             let event_value = ContractCallFilter {
                 sender: Address::from_slice(
-                    Vec::from_hex("00d618074b5031354854913a4cc51c1ae16c904c")
+                    Vec::from_hex("30c0c88B556c090E3647C5Dc75d64AfD2F905750")
                         .unwrap()
                         .as_slice(),
                 ),
-                destination_chain: "Goerli".to_owned(),
-                destination_contract_address: "0x81ee1a76a3869A4604eAF390E6A9793468BCA343"
+                destination_chain: config.name.clone(),
+                destination_contract_address: "0xdC4A108e0CB62C22931209e8DEEBBaA495226700"
                     .to_owned(),
                 payload_hash: [
                     112, 101, 15, 4, 9, 145, 221, 135, 52, 181, 191, 255, 190, 2, 100, 178, 161,
@@ -99,7 +96,7 @@ pub async fn start_listener(
                 ],
                 payload: bytes.unwrap(),
             };
-            info!("AxelarGateway event {:?}", &event_value);
+            info!("ScalarGateway event {:?}", &event_value);
 
             let duration = Duration::from_millis(180_000);
             loop {

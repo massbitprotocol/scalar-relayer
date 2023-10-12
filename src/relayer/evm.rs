@@ -2,9 +2,11 @@ use super::types::ExecuteData;
 use super::types::OwnerShipData;
 use super::RelayerConfig;
 
-use crate::abis::axelar_gateway::AxelarGateway;
+use crate::abis::AxelarExecutable;
+use crate::abis::ScalarGateway;
 use crate::create_rsv_signature;
 use crate::eth_hash_message;
+use crate::relayer::types::ApproveContractCallParam;
 use crate::relayer::types::ExecuteParam;
 use crate::relayer::types::ExecuteProof;
 use crate::types::Byte32;
@@ -13,7 +15,6 @@ use crate::SELECTOR_TRANSFER_OPERATORSHIP;
 use anyhow::anyhow;
 use ethers::abi::Token;
 use ethers::prelude::*;
-use ethers::utils::keccak256;
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use k256::PublicKey;
 use sha3::{Digest, Keccak256};
@@ -56,7 +57,7 @@ impl EvmRelayerInner {
     //     let provider = Provider::<Http>::try_from(rpc_url)?;
     //     let client = Arc::new(provider);
     //     let address: Address = contract_addr.parse()?;
-    //     let contract = AxelarGateway::new(address, client);
+    //     let contract = ScalarGateway::new(address, client);
     //     contract.transfer_operatorship(Bytes::from_iter(ownership_data.clone()), pubkey_hash);
     // }
     fn get_ownership_data(&self, address: &Address) -> Bytes {
@@ -73,7 +74,7 @@ impl EvmRelayerInner {
     //         let provider = Provider::<Http>::try_from(rpc_url)?;
     //         let client = Arc::new(provider);
     //         let address: Address = contract_addr.parse()?;
-    //         let contract = AxelarGateway::new(address, client);
+    //         let contract = ScalarGateway::new(address, client);
 
     //         if let Some(execute_param) = self.config.get_chain_id().map(|chain_id| {
     //             //Question? Which tss address put in here
@@ -116,7 +117,7 @@ impl EvmRelayerInner {
         let provider = Provider::<Http>::try_from(rpc_url)?;
         let client = Arc::new(provider);
         let address: Address = contract_addr.parse()?;
-        let contract = AxelarGateway::new(address, client);
+        let contract = ScalarGateway::new(address, client);
         info!(
             "last 20 bytes of hash 0x{}",
             hex::encode(&self.pubkey_hash[12..])
@@ -181,6 +182,7 @@ impl EvmRelayerInner {
     }
     pub async fn call_destination_contract(
         &mut self,
+        //Payload is a param of a ExecuteData with sigle command
         payload: Vec<u8>,
         signature: Signature,
     ) -> anyhow::Result<()> {
@@ -197,74 +199,29 @@ impl EvmRelayerInner {
         let provider = Provider::<Http>::try_from(&rpc_url)?;
         let client = Arc::new(provider);
         let address: Address = contract_addr.parse()?;
-        let contract = AxelarGateway::new(address, client);
-        // let approve_call_param = ApproveContractCallParam {
-        //     source_chain: "Goerli".to_string(),
-        //     source_address: event_value.sender.to_string(),
-        //     contract_address: event_value.destination_contract_address.parse().unwrap(),
-        //     payload_hash: event_value.payload_hash.clone(), //keccak256(event_value.payload),
-        //     source_tx_hash: keccak256(
-        //         "0x69a38e71ce125c1e205a958c33a61b17de25852ae497837034ddaed60a8a33ca",
-        //     ),
-        //     source_event_index: U256::from(1),
-        // };
-        // let param_data: Vec<u8> = approve_call_param.into();
-        // info!("Approve params 0x{}", hex::encode(payload.as_slice()));
-        //info!("Approve params {:#02x?}", param_data);
-        //let signature = DerSignature::try_from(signature.as_slice())?;
-        //let signature = Signature::from_der(signature.as_slice());
-        //How to sign before call
-        //Whehe to use tss_signature
-        //Create random or sequence command id
-        // let command_id = keccak256(vec![42; 32]);
-        // let source_chain = "Goerli".to_string();
-        // let source_address = event_value.sender.to_string();
-        // let contract_address = Address::from_slice(
-        //     Vec::from_hex(event_value.destination_contract_address.clone())
-        //         .unwrap()
-        //         .as_slice(),
-        // );
-        // let payload_hash = keccak256(event_value.payload.clone());
-        /*
-         * Approve contract call
-         * params: Byte array encoded from values:
-         *      sourceChainName,
-         *      sourceCustomContract,
-         *      destinationCustomContract,
-         *      payloadHash,
-         *      sourceTxHash,
-         *      sourceEventIndex
-         * command_id: Some random 32 bytes hash
-         */
-        // let params = Bytes::from(vec![]);
-        // let contract_call = contract.approve_contract_call(params, command_id);
-        // let is_contract_call_approved = contract
-        //     .is_contract_call_approved(
-        //         command_id,
-        //         source_chain,
-        //         source_address,
-        //         contract_address,
-        //         payload_hash,
-        //     )
-        //     .call()
-        //     .await;
-        /**
-         * @notice Executes a batch of commands signed by the Axelar network. There are a finite set of command types that can be executed.
-         * @param input The encoded input containing the data for the batch of commands, as well as the proof that verifies the integrity of the data.
-         * @dev Each command has a corresponding commandID that is guaranteed to be unique from the Axelar network.
-         * @dev This function allows retrying a commandID if the command initially failed to be processed.
-         * @dev Ignores unknown commands or duplicate commandIDs.
-         * @dev Emits an Executed event for successfully executed commands.
-         */
-        //Note: Only this function in Axelar gateway use validateProof
+        let contract = ScalarGateway::new(address, client.clone());
+
         //Payload is ExecuteData'serialized bytes
+        let execute_data = ExecuteData::try_from(payload.as_slice());
+
         let execute_proof = self.tss_address.as_ref().map(|address| {
             let mut rsv_signature = signature.to_vec();
             create_rsv_signature(&mut rsv_signature);
             ExecuteProof::from_rsv_signature(address.clone(), rsv_signature)
         });
 
-        if let Some(proof) = execute_proof {
+        if let (
+            Ok(ExecuteData {
+                chain_id,
+                command_ids,
+                commands,
+                params,
+            }),
+            Some(proof),
+        ) = (execute_data, execute_proof)
+        {
+            // 1. First call ScalarGateway.approveContractCall
+            // In the method Scalar gateway mark the smartcontract is valid for call
             let mut tokens = vec![];
             tokens.push(Token::Bytes(payload));
             tokens.push(Token::Bytes(proof.into()));
@@ -273,14 +230,39 @@ impl EvmRelayerInner {
                 "Execute params for transaction 0x{}",
                 hex::encode(param_data.as_slice())
             );
-            match contract.execute(Bytes::from_iter(param_data)).call().await {
-                Ok(_) => {
-                    info!("Executed transaction successfully");
-                }
-                Err(err) => {
-                    info!("Executed transaction with error {:?}", err);
-                }
+            contract
+                .execute(Bytes::from_iter(param_data))
+                .call()
+                .await
+                .map_err(|err| anyhow!("Executed transaction with error {:?}", err))?;
+            // 2. Call DestinationContract.execute (DestinationContract must extend ScalarExecute)
+            // This method call gateway for check if method is valid for call then call execute
+            if let Some(ApproveContractCallParam {
+                source_chain,
+                source_address,
+                contract_address,
+                payload_hash,
+                source_tx_hash,
+                source_event_index,
+            }) = params
+                .get(0)
+                .and_then(|param| ApproveContractCallParam::try_from(param.as_slice()).ok())
+            {
+                let executable_contract = AxelarExecutable::new(contract_address, client);
+                let command_id = command_ids.get(0).unwrap().clone();
+                executable_contract
+                    .execute(
+                        command_id,
+                        source_chain,
+                        source_address,
+                        Bytes::from_iter(params.get(0).unwrap()),
+                    )
+                    .call()
+                    .await
+                    .map_err(|err| anyhow!("Call destination execute error {:?}", err))?;
             }
+        } else {
+            return Err(anyhow!("Missing tss operator"));
         }
         Ok(())
     }
