@@ -78,18 +78,18 @@ async fn main() -> Result<()> {
         let (tx_out, rx_out) = mpsc::unbounded_channel::<ScalarOutgoingMessage>();
         let sender_handle = spawn_sender(evm_relayers.clone(), rx_out);
         handles.push(sender_handle);
-        info!("Start relayer with config {:?}", &relayer_config);
-        let gprc_url = format!(
+        let grpc_url = format!(
             "{}:{}",
             config.grpc_host.as_ref().unwrap(),
             config.grpc_port.as_ref().unwrap() + ind
         );
-        warn!("Narwhal Grpc server {:?}", &gprc_url);
-        if let Ok(client) = ScalarAbciClient::connect(gprc).await {
+        warn!("Narwhal Grpc server {:?}", &grpc_url);
+        if let Ok(grpc_client) = ScalarAbciClient::connect(grpc_url).await {
             let relayer_handles = evm_relayers.into_iter().map(|relayer| {
                 let tx = tx_out.clone();
+                let client = grpc_client.clone();
                 tokio::spawn(async move {
-                    let _ = relayer::start_listener(client, tx).await;
+                    let _ = relayer::start_listener(relayer, client, tx).await;
                 })
             });
 
@@ -112,10 +112,10 @@ fn spawn_sender(
             //println!("Push block into stream {:?}", &value);
             match item {
                 ScalarOutgoingMessage::KeygenData((epoch, pubkey)) => {
-                    handle_keygen_data(&evm_relayers, epoch, pubkey).await;
+                    let _ = handle_keygen_data(&evm_relayers, epoch, pubkey).await;
                 }
                 ScalarOutgoingMessage::Transaction(tran) => {
-                    handle_transaction(&evm_relayers, tran).await;
+                    let _ = handle_transaction(&evm_relayers, tran).await;
                 }
             }
         }

@@ -126,7 +126,7 @@ impl TryFrom<&[u8]> for ApproveContractCallParam {
         //source_event_index
         params.push(ParamType::Uint(32));
 
-        let mut tokens = ethers::abi::decode(params.as_slice(), value)
+        let tokens = ethers::abi::decode(params.as_slice(), value)
             .map_err(|err| anyhow!("Decode error {:?}", &err))?;
         assert_eq!(tokens.len(), 6);
         if let Some((
@@ -201,7 +201,7 @@ impl TryFrom<&[u8]> for ExecuteData {
         params.push(ParamType::Array(Box::new(ParamType::String)));
         //Params
         params.push(ParamType::Array(Box::new(ParamType::Bytes)));
-        let mut tokens = ethers::abi::decode(params.as_slice(), value)
+        let tokens = ethers::abi::decode(params.as_slice(), value)
             .map_err(|err| anyhow!("Decode error {:?}", &err))?;
         assert_eq!(tokens.len(), 4);
         if let Some((

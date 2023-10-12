@@ -70,12 +70,12 @@ pub trait Relayer {}
 
 pub async fn start_listener(
     relayer: Arc<EvmRelayer>,
-    grpc_client: Option<ScalarAbciClient<Channel>>,
+    mut grpc_client: ScalarAbciClient<Channel>,
     tx: mpsc::UnboundedSender<ScalarOutgoingMessage>,
 ) -> anyhow::Result<()> {
     //let handle = tokio::spawn(async move {});
     let config = relayer.get_config_infos().await;
-    if let Some((chain_id, chain_name, rpc_addr, ws_addr, contract_addr)) = config {
+    if let Some((_chain_id, chain_name, _rpc_addr, ws_addr, contract_addr)) = config {
         info!("Start relayer with websocket url {:?}", ws_addr);
         let provider = Provider::<Ws>::connect(ws_addr.as_str())
             .await
@@ -95,7 +95,7 @@ pub async fn start_listener(
                 .map_err(|e| Err::<(), anyhow::Error>(anyhow!("{:?}", e)))
                 .expect("Contract error")
                 .take(1);
-            let bytes = Bytes::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000f48656c6c6f204176616c616e6368650000000000000000000000000000000000");
+            let bytes = Bytes::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000f48656c6c6f204176616c616e6368650000000000000000000000000000000000")?;
             // info!("{:?}", bytes);
             let event_value = ContractCallFilter {
                 sender: Address::from_slice(
@@ -110,10 +110,13 @@ pub async fn start_listener(
                     112, 101, 15, 4, 9, 145, 221, 135, 52, 181, 191, 255, 190, 2, 100, 178, 161,
                     219, 6, 255, 101, 134, 235, 14, 47, 14, 216, 50, 87, 249, 177, 71,
                 ],
-                payload: bytes.unwrap(),
+                payload: bytes.clone(),
             };
             info!("ScalarGateway event {:?}", &event_value);
-
+            let payload = bytes.as_ref().to_vec();
+            let _ = relayer
+                .store_payload(payload, event_value.payload_hash.clone())
+                .await;
             let duration = Duration::from_millis(180_000);
             loop {
                 let approve_contract_param: Vec<u8> = ApproveContractCallParam::from((
@@ -187,49 +190,49 @@ pub async fn start_listener(
             Ok(())
         });
         handles.push(listener_handle);
-        if let Some(mut grpc_client) = grpc_client {
-            let grpc_handle = tokio::spawn(async move {
-                let in_stream = async_stream::stream! {
-                    while let Some(item) = rx_external_event.recv().await {
-                        //let value = serde_json::to_string(&item).unwrap();
-                        //println!("Push block into stream {:?}", &value);
-                        info!("Receive message from external, send it into narwhal consensus");
-                        yield ScalarAbciRequest{
-                            payload: item,
-                        };
-                    }
-                };
-                //pin_mut!(in_stream);
-                let response = grpc_client
-                    .bidirectional_streaming_scalar_abci(in_stream)
-                    .await
-                    .unwrap();
 
-                let mut resp_stream = response.into_inner();
-
-                while let Some(Ok(ScalarAbciResponse { message })) = resp_stream.next().await {
-                    match message {
-                        Some(Message::Ark(RequestArk { payload })) => {
-                            info!("Ark message: `{}`", hex::encode(&payload));
-                        }
-                        Some(Message::Tran(ScalarOutTransaction { message })) => {
-                            info!("Send message to the relayer: `{}`", &message);
-                            let _ = tx.send(ScalarOutgoingMessage::Transaction(message));
-                        }
-                        Some(Message::Keygen(KeygenOutput { epoch, pub_key })) => {
-                            info!(
-                                "Send new tss - pubkey at the epoch {} to the relayers: {:?}",
-                                epoch, &pub_key
-                            );
-                            let _ = tx.send(ScalarOutgoingMessage::KeygenData((epoch, pub_key)));
-                        }
-                        None => {}
-                    }
+        let grpc_handle = tokio::spawn(async move {
+            let in_stream = async_stream::stream! {
+                while let Some(item) = rx_external_event.recv().await {
+                    //let value = serde_json::to_string(&item).unwrap();
+                    //println!("Push block into stream {:?}", &value);
+                    info!("Receive message from external, send it into narwhal consensus");
+                    yield ScalarAbciRequest{
+                        payload: item,
+                    };
                 }
-                Ok(())
-            });
-            handles.push(grpc_handle);
-        }
+            };
+            //pin_mut!(in_stream);
+            let response = grpc_client
+                .bidirectional_streaming_scalar_abci(in_stream)
+                .await
+                .unwrap();
+
+            let mut resp_stream = response.into_inner();
+
+            while let Some(Ok(ScalarAbciResponse { message })) = resp_stream.next().await {
+                match message {
+                    Some(Message::Ark(RequestArk { payload })) => {
+                        info!("Ark message: `{}`", hex::encode(&payload));
+                    }
+                    Some(Message::Tran(ScalarOutTransaction { message })) => {
+                        info!("Send message to the relayer: `{}`", &message);
+                        let _ = tx.send(ScalarOutgoingMessage::Transaction(message));
+                    }
+                    Some(Message::Keygen(KeygenOutput { epoch, pub_key })) => {
+                        info!(
+                            "Send new tss - pubkey at the epoch {} to the relayers: {:?}",
+                            epoch, &pub_key
+                        );
+                        let _ = tx.send(ScalarOutgoingMessage::KeygenData((epoch, pub_key)));
+                    }
+                    None => {}
+                }
+            }
+            Ok(())
+        });
+        handles.push(grpc_handle);
+
         let _ = join_all(handles).await;
 
         //info!("Stop listen event from external chain");

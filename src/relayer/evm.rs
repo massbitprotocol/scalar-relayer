@@ -6,7 +6,6 @@ use crate::abis::AxelarExecutable;
 use crate::abis::ScalarGateway;
 use crate::create_rsv_signature;
 use crate::eth_hash_message;
-use crate::proto::scalar_abci_client::ScalarAbciClient;
 use crate::relayer::types::ApproveContractCallParam;
 use crate::relayer::types::ExecuteParam;
 use crate::relayer::types::ExecuteProof;
@@ -21,19 +20,21 @@ use k256::PublicKey;
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
-use tonic::transport::Channel;
 use tracing::info;
 
-pub type MapPayload = HashMap<[u8; 32], bool>;
+pub type MapPayload<V> = HashMap<[u8; 32], V>;
+
 pub struct EvmRelayerInner {
     config: RelayerConfig,
     epoch: u64,
     pubkey: Vec<u8>,
     pubkey_hash: [u8; 32],
     tss_address: Option<Address>,
-    send_payloads: MapPayload,
+    //Todo: simple design for get source's payload then send it to destination smartcontract
+    payloads: MapPayload<Vec<u8>>,
+    //Payload sent to destination gateway to approve
+    send_payloads: MapPayload<bool>,
 }
 
 impl EvmRelayerInner {
@@ -44,7 +45,8 @@ impl EvmRelayerInner {
             pubkey: vec![],
             pubkey_hash: [0u8; 32],
             tss_address: None,
-            send_payloads: MapPayload::default(),
+            payloads: MapPayload::<Vec<u8>>::default(),
+            send_payloads: MapPayload::<bool>::default(),
         }
     }
     pub fn get_config_infos(&self) -> Option<(U256, String, String, String, String)> {
@@ -53,8 +55,15 @@ impl EvmRelayerInner {
     pub fn get_chain_id(&self) -> Option<U256> {
         self.config.get_chain_id()
     }
-    pub fn add_payload(&mut self, payload_hash: [u8; 32]) {
+    pub fn add_sent_payload(&mut self, payload_hash: [u8; 32]) {
         self.send_payloads.insert(payload_hash, true);
+    }
+    pub fn store_payload(&mut self, payload: Vec<u8>, payload_hash: Byte32) -> anyhow::Result<()> {
+        self.payloads.insert(payload_hash, payload);
+        Ok(())
+    }
+    fn get_payload_by_hash(&self, payload_hash: &[u8]) -> Option<&Vec<u8>> {
+        self.payloads.get(payload_hash)
     }
     // pub fn owner_call(&self) {
     //     let wallet: LocalWallet = OWNER_PRIVATE_KEY.parse().unwrap();
@@ -196,7 +205,7 @@ impl EvmRelayerInner {
         if self.send_payloads.contains_key(&payload_hash) {
             return Err(anyhow!("Payload already send to destination chain"));
         } else {
-            self.add_payload(payload_hash);
+            self.add_sent_payload(payload_hash);
         }
         let rpc_url = self.config.rpc_addr.as_ref().unwrap().clone();
         let contract_addr = self.config.call_contract.as_ref().unwrap().clone();
@@ -218,9 +227,9 @@ impl EvmRelayerInner {
 
         if let (
             Ok(ExecuteData {
-                chain_id,
+                chain_id: _,
                 command_ids,
-                commands,
+                commands: _,
                 params,
             }),
             Some(proof),
@@ -248,24 +257,26 @@ impl EvmRelayerInner {
                 source_address,
                 contract_address,
                 payload_hash,
-                source_tx_hash,
-                source_event_index,
+                source_tx_hash: _,
+                source_event_index: _,
             }) = params
                 .get(0)
                 .and_then(|param| ApproveContractCallParam::try_from(param.as_slice()).ok())
             {
                 let executable_contract = AxelarExecutable::new(contract_address, client);
                 let command_id = command_ids.get(0).unwrap().clone();
-                executable_contract
-                    .execute(
-                        command_id,
-                        source_chain,
-                        source_address,
-                        Bytes::from_iter(params.get(0).unwrap()),
-                    )
-                    .call()
-                    .await
-                    .map_err(|err| anyhow!("Call destination execute error {:?}", err))?;
+                if let Some(contract_payload) = self.get_payload_by_hash(&payload_hash) {
+                    executable_contract
+                        .execute(
+                            command_id,
+                            source_chain,
+                            source_address,
+                            Bytes::from_iter(contract_payload),
+                        )
+                        .call()
+                        .await
+                        .map_err(|err| anyhow!("Call destination execute error {:?}", err))?;
+                }
             }
         } else {
             return Err(anyhow!("Missing tss operator"));
@@ -284,11 +295,21 @@ impl EvmRelayer {
             internal: Arc::new(RwLock::new(inner)),
         }
     }
-    //Return (ws_url, )
+    //Return (chain_id, chain_name, rpc_address, ws_address, contract_addr)
     pub async fn get_config_infos(&self) -> Option<(U256, String, String, String, String)> {
         self.internal.read().await.get_config_infos()
     }
-
+    pub async fn get_chain_id(&self) -> Option<U256> {
+        self.internal.read().await.get_chain_id()
+    }
+    pub async fn store_payload(
+        &self,
+        payload: Vec<u8>,
+        payload_hash: Byte32,
+    ) -> anyhow::Result<()> {
+        let mut guard = self.internal.write().await;
+        guard.store_payload(payload, payload_hash)
+    }
     pub async fn update_pubkey(
         &self,
         epoch: u64,
