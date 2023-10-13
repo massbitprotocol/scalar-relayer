@@ -113,34 +113,44 @@ pub async fn start_listener(
                 payload: bytes.clone(),
             };
             info!("ScalarGateway event {:?}", &event_value);
-            let payload = bytes.as_ref().to_vec();
-            let _ = relayer
-                .store_payload(payload, event_value.payload_hash.clone())
-                .await;
+
             let duration = Duration::from_millis(180_000);
+            let mut inited = false;
             loop {
-                let approve_contract_param: Vec<u8> = ApproveContractCallParam::from((
-                    chain_name.clone(),
-                    "transactionhash".to_string(),
-                    event_value.clone(),
-                ))
-                .into();
-                //Destination chain_id
-                if let Some(chain_id) = SUPPORTED_CHAINS
-                    .get(event_value.destination_chain.to_ascii_lowercase().as_str())
-                    .map(|id| id.clone())
-                    .clone()
-                {
-                    let execute_data = ExecuteData::from_command(
-                        //Destination chain id
-                        chain_id,
-                        SELECTOR_APPROVE_CONTRACT_CALL,
-                        approve_contract_param,
-                    );
-                    info!("Init AxelarGateway event {:?}", &execute_data);
-                    let message: Vec<u8> = execute_data.into();
-                    let _res = tx_external_event.send(message);
+                if relayer.has_tss_pubkey().await {
+                    let payload = bytes.as_ref().to_vec();
+                    let _ = relayer
+                        .store_payload(payload, event_value.payload_hash.clone())
+                        .await;
+                    let approve_contract_param: Vec<u8> = ApproveContractCallParam::from((
+                        chain_name.clone(),
+                        "transactionhash".to_string(),
+                        event_value.clone(),
+                    ))
+                    .into();
+                    //Destination chain_id
+                    if let Some(chain_id) = SUPPORTED_CHAINS
+                        .get(event_value.destination_chain.to_ascii_lowercase().as_str())
+                        .map(|id| id.clone())
+                        .clone()
+                    {
+                        let execute_data = ExecuteData::from_command(
+                            //Destination chain id
+                            chain_id,
+                            SELECTOR_APPROVE_CONTRACT_CALL,
+                            approve_contract_param,
+                        );
+                        if !inited {
+                            info!("Init AxelarGateway event {:?}", &execute_data);
+                            let message: Vec<u8> = execute_data.into();
+                            let _res = tx_external_event.send(message);
+                            inited = true;
+                        }
+                    }
+                } else {
+                    info!("Waiting for Tss's key generation");
                 }
+
                 sleep(duration).await;
             }
             //     while let Some(Ok(evt)) = stream.next().await {

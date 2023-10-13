@@ -22,6 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "axelar_executable.rs",
         "/@axelar-network/axelar-gmp-sdk-solidity/contracts/executable",
     )?;
+    //Using ethcontract
+    //build_ethcontract
     // match abi_generator("ExecutableSample", "executable_sample.rs") {
     //     Ok(_) => {
     //         println!("Generate abis successfully");
@@ -33,6 +35,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// fn build_ethcontract() -> Result<(), Error> {
+//     let out_dir = std::env::var("OUT_DIR").unwrap();
+//     let dest = std::path::Path::new(&out_dir).join("contracts.rs");
+
+//     let artifact = HardHatLoader::new()
+//         .deny_network_by_name("localhost")
+//         .load_from_directory("../hardhat/deployments")
+//         .unwrap();
+
+//     for contract in artifact.iter() {
+//         ContractBuilder::new()
+//             .generate(contract)
+//             .unwrap()
+//             .write_to_file(&dest)
+//             .unwrap();
+//     }
+//     Ok(())
+// }
 fn build_proto() -> Result<(), Error> {
     tonic_build::configure()
         .out_dir("src/proto")

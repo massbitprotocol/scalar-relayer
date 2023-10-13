@@ -115,6 +115,9 @@ impl EvmRelayerInner {
     //     }
     //     Ok(())
     // }
+    pub fn has_tss_pubkey(&self) -> bool {
+        self.pubkey.len() > 0
+    }
     pub async fn update_pubkey(
         &mut self,
         epoch: u64,
@@ -140,7 +143,11 @@ impl EvmRelayerInner {
         let tss_address: Address = hex::encode(&self.pubkey_hash[12..])
             .parse()
             .map_err(|err| anyhow!("Adress parser error {:?}", &err))?;
-        info!("Update new address for tss {:?}", tss_address.to_string());
+        info!(
+            "Call method execute on smart contract {:?} to update new address for tss {:?}",
+            address.to_string(),
+            tss_address.to_string()
+        );
         self.tss_address = Some(tss_address.clone());
         let ownership_data = OwnerShipData::from(tss_address).into();
         //Call transfer_opratorship onlySelf method
@@ -161,11 +168,8 @@ impl EvmRelayerInner {
                 "Execute params of update tss address call 0x{}",
                 hex::encode(execute_param.as_slice())
             );
-            match contract
-                .execute(Bytes::from_iter(execute_param))
-                .call()
-                .await
-            {
+            let contract_call = contract.execute(Bytes::from_iter(execute_param));
+            match contract_call.call().await {
                 Ok(_) => {
                     info!("Executed update tss address successfully");
                 }
@@ -309,6 +313,10 @@ impl EvmRelayer {
     ) -> anyhow::Result<()> {
         let mut guard = self.internal.write().await;
         guard.store_payload(payload, payload_hash)
+    }
+    pub async fn has_tss_pubkey(&self) -> bool {
+        let guard = self.internal.read().await;
+        guard.has_tss_pubkey()
     }
     pub async fn update_pubkey(
         &self,
