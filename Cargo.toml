@@ -10,10 +10,9 @@ resolver = "2"
 [dependencies]
 clap = {version = "3.0", default-features = false, features = ["std", "cargo", "env"]}
 ethers = { version = "2.0", features = ["abigen", "ipc", "rustls", "ws"]}
-ethcontract = "0.25.2"
 web3 = "0.19"
 eyre = "0.6"
-tiny-keccak = "2.0.2"
+tiny-keccak = { version = "2.0.2", features = ["sha3"]}
 k256 = { version = "0.13" }
 secp256k1 = { version = "0.27" }
 futures = "0.3.21"
