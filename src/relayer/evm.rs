@@ -10,17 +10,22 @@ use crate::relayer::types::ApproveContractCallParam;
 use crate::relayer::types::ExecuteParam;
 use crate::relayer::types::ExecuteProof;
 use crate::types::Byte32;
+use crate::OWNER_PRIVATE_KEY;
 
 use crate::SELECTOR_TRANSFER_OPERATORSHIP;
 use anyhow::anyhow;
 use ethers::abi::Token;
 use ethers::prelude::*;
-use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+use ethers::types::{transaction::eip2718::TypedTransaction, Signature};
+use ethers::utils::rlp::Rlp;
+use k256::ecdsa::SigningKey;
+use k256::ecdsa::{RecoveryId, VerifyingKey};
 use k256::PublicKey;
-use sha3::{Digest, Keccak256};
+use sha3::Keccak256;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::debug;
 use tracing::info;
 
 pub type MapPayload<V> = HashMap<[u8; 32], V>;
@@ -31,6 +36,7 @@ pub struct EvmRelayerInner {
     pubkey: Vec<u8>,
     pubkey_hash: [u8; 32],
     tss_address: Option<Address>,
+    client: Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
     //Todo: simple design for get source's payload then send it to destination smartcontract
     payloads: MapPayload<Vec<u8>>,
     //Payload sent to destination gateway to approve
@@ -39,12 +45,19 @@ pub struct EvmRelayerInner {
 
 impl EvmRelayerInner {
     fn new(config: RelayerConfig) -> Self {
+        assert_eq!(config.rpc_addr.is_some(), true);
+        let provider = Provider::<Http>::try_from(config.rpc_addr.as_ref().unwrap().clone());
+        let signer = OWNER_PRIVATE_KEY.parse::<LocalWallet>();
+        assert_eq!(signer.is_ok(), true);
+        assert_eq!(provider.is_ok(), true);
+        let client = Arc::new(provider.unwrap().with_signer(signer.unwrap()));
         Self {
             config,
             epoch: 0,
             pubkey: vec![],
             pubkey_hash: [0u8; 32],
             tss_address: None,
+            client,
             payloads: MapPayload::<Vec<u8>>::default(),
             send_payloads: MapPayload::<bool>::default(),
         }
@@ -64,6 +77,97 @@ impl EvmRelayerInner {
     }
     fn get_payload_by_hash(&self, payload_hash: &[u8]) -> Option<&Vec<u8>> {
         self.payloads.get(payload_hash)
+    }
+    async fn fill_smartcontract_transaction(
+        &self,
+        contract_call: &mut FunctionCall<
+            Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
+            SignerMiddleware<Provider<Http>, Wallet<SigningKey>>,
+            (),
+        >,
+    ) -> anyhow::Result<()> {
+        let _ = self
+            .client
+            .fill_transaction(&mut contract_call.tx, contract_call.block.clone())
+            .await;
+        if (contract_call.tx.value().is_none()) {
+            contract_call.tx.set_value(U256::zero());
+        }
+        if let Some(chain_id) = self.config.get_chain_id() {
+            contract_call.tx.set_chain_id(chain_id.as_u64());
+        }
+        info!("Filled transaction {:?}", &contract_call.tx);
+        Ok(())
+    }
+    fn create_signed_transaction(
+        &self,
+        contract_call: &FunctionCall<
+            Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
+            SignerMiddleware<Provider<Http>, Wallet<SigningKey>>,
+            (),
+        >,
+    ) -> anyhow::Result<Bytes> {
+        let encoded = contract_call.tx.rlp();
+        debug!("Encoded tx {:?}", &encoded);
+        let tx_hash = contract_call.tx.sighash();
+        debug!("TxHash {:?}", &tx_hash);
+        let signer = self.client.signer();
+        let mut signature = signer.sign_hash(tx_hash)?;
+        debug!("Signature {}", &signature);
+        self.adjust_signature(&contract_call.tx, &mut signature);
+        let signed_tx = contract_call.tx.rlp_signed(&signature);
+        self.decode_signed_rlp(&signed_tx);
+        Ok(signed_tx)
+    }
+    fn adjust_signature(&self, tx: &TypedTransaction, signature: &mut Signature) {
+        //let chain_id = tx.chain_id().unwrap_or_else(U64::one).as_u64();
+        match tx {
+            TypedTransaction::Legacy(ref tx) => {}
+            TypedTransaction::Eip2930(_) => {
+                if signature.v >= 27 {
+                    //signature.v = signature.v + 35 + 2 * chain_id - 27;
+                    signature.v = signature.v - 27;
+                }
+            }
+            TypedTransaction::Eip1559(_) => {
+                if signature.v >= 27 {
+                    //signature.v = signature.v + 35 + 2 * chain_id - 27;
+                    signature.v = signature.v - 27;
+                }
+            }
+            #[cfg(feature = "optimism")]
+            TypedTransaction::OptimismDeposited(inner) => {
+                if signature.v >= 27 {
+                    //signature.v = signature.v + 35 + 2 * chain_id - 27;
+                    signature.v = signature.v - 27;
+                }
+            }
+        };
+    }
+    fn decode_signed_rlp(&self, signed_tx: &Bytes) -> anyhow::Result<()> {
+        debug!("Try decode encoded transaction");
+        let rlp = Rlp::new(signed_tx.as_ref());
+        let (tx, sig) = TypedTransaction::decode_signed(&rlp)?;
+        debug!("Transaction {:?}", &tx);
+        debug!("Transaction rlp {:?}", tx.rlp());
+        debug!("Signature {}", &sig);
+        Ok(())
+    }
+    async fn send_contract_call(
+        &self,
+        contract_call: &mut FunctionCall<
+            Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
+            SignerMiddleware<Provider<Http>, Wallet<SigningKey>>,
+            (),
+        >,
+    ) -> anyhow::Result<Option<TransactionReceipt>> {
+        let _ = self.fill_smartcontract_transaction(contract_call).await;
+        let signed_tx = self.create_signed_transaction(contract_call)?;
+        info!("Signed tx {:?}", signed_tx);
+        let pending_tx = self.client.send_raw_transaction(signed_tx).await?;
+        pending_tx
+            .await
+            .map_err(|err| anyhow!("Send transaction error {:?}", err))
     }
     // pub fn owner_call(&self) {
     //     let wallet: LocalWallet = OWNER_PRIVATE_KEY.parse().unwrap();
@@ -130,12 +234,10 @@ impl EvmRelayerInner {
         self.epoch = epoch;
         self.pubkey = pubkey;
         self.pubkey_hash = pubkey_hash;
-        let rpc_url = self.config.rpc_addr.as_ref().unwrap().clone();
         let contract_addr = self.config.call_contract.as_ref().unwrap().clone();
-        let provider = Provider::<Http>::try_from(rpc_url)?;
-        let client = Arc::new(provider);
         let address: Address = contract_addr.parse()?;
-        let contract = ScalarGateway::new(address, client);
+        let contract = ScalarGateway::new(address, self.client.clone());
+
         info!(
             "last 20 bytes of hash 0x{}",
             hex::encode(&self.pubkey_hash[12..])
@@ -168,42 +270,39 @@ impl EvmRelayerInner {
                 "Execute params of update tss address call 0x{}",
                 hex::encode(execute_param.as_slice())
             );
-            let contract_call = contract.execute(Bytes::from_iter(execute_param));
-            match contract_call.call().await {
-                Ok(_) => {
-                    info!("Executed update tss address successfully");
-                }
-                Err(err) => {
-                    info!("Executed update tss address with error {:?}", err);
-                }
-            }
+
+            let mut contract_call = contract.execute(Bytes::from_iter(execute_param));
+            let res = self.send_contract_call(&mut contract_call).await;
+            info!("Contract call result {:?}", &res);
+            // Some how this method is not working
+            // let pending_tx = contract_call.send().await?.await;
         }
 
         Ok(())
     }
-    fn verify_signature(&self, payload: &[u8], signature: &Signature) -> anyhow::Result<bool> {
-        // assert!(pubkey
-        //     .verify_prehashed(&FieldBytes::from_slice(payload_hash.as_slice()), &signature)
-        //     .is_ok());
-        let expected_key = VerifyingKey::from_sec1_bytes(self.pubkey.as_slice())?;
-        let signature_data = signature.to_vec();
-        let first_s = signature_data[32].clone();
-        let v = first_s >> 7;
-        let recid = RecoveryId::try_from(v)?;
-        let digest = Keccak256::new_with_prefix(payload);
-        let recovered_key = VerifyingKey::recover_from_digest(digest, &signature, recid)?;
-        // let hash_payload = keccak256(payload);
-        // let recovered_key = VerifyingKey::recover_from_msg(&hash_payload, &signature, recid)?;
-        info!("Verify public key");
-        assert_eq!(recovered_key, expected_key);
-        let _pub_key = PublicKey::from(recovered_key);
-        Ok(true)
-    }
+    // fn verify_signature(&self, payload: &[u8], signature: &Signature) -> anyhow::Result<bool> {
+    //     // assert!(pubkey
+    //     //     .verify_prehashed(&FieldBytes::from_slice(payload_hash.as_slice()), &signature)
+    //     //     .is_ok());
+    //     let expected_key = VerifyingKey::from_sec1_bytes(self.pubkey.as_slice())?;
+    //     let signature_data = signature.to_vec();
+    //     let first_s = signature_data[32].clone();
+    //     let v = first_s >> 7;
+    //     let recid = RecoveryId::try_from(v)?;
+    //     let digest = Keccak256::new_with_prefix(payload);
+    //     let recovered_key = VerifyingKey::recover_from_digest(digest, &signature, recid)?;
+    //     // let hash_payload = keccak256(payload);
+    //     // let recovered_key = VerifyingKey::recover_from_msg(&hash_payload, &signature, recid)?;
+    //     info!("Verify public key");
+    //     assert_eq!(recovered_key, expected_key);
+    //     let _pub_key = PublicKey::from(recovered_key);
+    //     Ok(true)
+    // }
     pub async fn call_destination_contract(
         &mut self,
         //Payload is a param of a ExecuteData with sigle command
         payload: Vec<u8>,
-        signature: Signature,
+        signature: k256::ecdsa::Signature,
     ) -> anyhow::Result<()> {
         let payload_hash = eth_hash_message(payload.as_slice());
         if self.send_payloads.contains_key(&payload_hash) {
@@ -330,7 +429,7 @@ impl EvmRelayer {
     pub async fn call_destination_contract(
         &self,
         payload: Vec<u8>,
-        signature: Signature,
+        signature: k256::ecdsa::Signature,
     ) -> anyhow::Result<()> {
         let mut guard = self.internal.write().await;
         guard.call_destination_contract(payload, signature).await

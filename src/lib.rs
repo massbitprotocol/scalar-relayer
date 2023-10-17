@@ -11,7 +11,6 @@ use ethers::types::{Address, U256};
 use ethers::utils::{hex::FromHex, keccak256};
 use std::collections::HashMap;
 use std::env;
-
 pub const SELECTOR_BURN_TOKEN: &str = "burnToken";
 pub const SELECTOR_DEPLOY_TOKEN: &str = "deployToken";
 pub const SELECTOR_MINT_TOKEN: &str = "mintToken";
@@ -23,7 +22,6 @@ lazy_static! {
     pub static ref OWNER_PRIVATE_KEY: String = {
         env::var("OWNER_PRIVATE_KEY").unwrap_or_default()
     };
-
     /*
      * Get chain id by config name
      * https://chainlist.org/
