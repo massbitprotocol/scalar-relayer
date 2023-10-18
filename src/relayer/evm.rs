@@ -31,6 +31,7 @@ use tracing::info;
 pub type MapPayload<V> = HashMap<[u8; 32], V>;
 
 pub struct EvmRelayerInner {
+    index: usize,
     config: RelayerConfig,
     epoch: u64,
     pubkey: Vec<u8>,
@@ -44,7 +45,7 @@ pub struct EvmRelayerInner {
 }
 
 impl EvmRelayerInner {
-    fn new(config: RelayerConfig) -> Self {
+    fn new(index: usize, config: RelayerConfig) -> Self {
         assert_eq!(config.rpc_addr.is_some(), true);
         let provider = Provider::<Http>::try_from(config.rpc_addr.as_ref().unwrap().clone());
         let signer = OWNER_PRIVATE_KEY.parse::<LocalWallet>();
@@ -52,6 +53,7 @@ impl EvmRelayerInner {
         assert_eq!(provider.is_ok(), true);
         let client = Arc::new(provider.unwrap().with_signer(signer.unwrap()));
         Self {
+            index,
             config,
             epoch: 0,
             pubkey: vec![],
@@ -392,8 +394,8 @@ pub struct EvmRelayer {
 }
 
 impl EvmRelayer {
-    pub fn new(relayer_config: RelayerConfig) -> Self {
-        let inner = EvmRelayerInner::new(relayer_config.clone());
+    pub fn new(index: usize, relayer_config: RelayerConfig) -> Self {
+        let inner = EvmRelayerInner::new(index, relayer_config);
         Self {
             internal: Arc::new(RwLock::new(inner)),
         }
