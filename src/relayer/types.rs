@@ -174,10 +174,11 @@ impl ExecuteData {
         }
     }
     pub fn from_command(chain_id: U256, command: &str, param: Bytes) -> Self {
-        let uuid = Uuid::new_v4();
+        // Todo: Somehow set command_id in global variable
+        let command_id = keccak256(param.as_slice());
         Self {
             chain_id,
-            command_ids: vec![keccak256(uuid.as_bytes())],
+            command_ids: vec![command_id],
             commands: vec![String::from(command)],
             params: vec![param],
         }

@@ -92,7 +92,7 @@ impl EvmRelayerInner {
             .client
             .fill_transaction(&mut contract_call.tx, contract_call.block.clone())
             .await;
-        if (contract_call.tx.value().is_none()) {
+        if contract_call.tx.value().is_none() {
             contract_call.tx.set_value(U256::zero());
         }
         if let Some(chain_id) = self.config.get_chain_id() {
@@ -118,7 +118,7 @@ impl EvmRelayerInner {
         debug!("Signature {}", &signature);
         self.adjust_signature(&contract_call.tx, &mut signature);
         let signed_tx = contract_call.tx.rlp_signed(&signature);
-        self.decode_signed_rlp(&signed_tx);
+        //self.decode_signed_rlp(&signed_tx);
         Ok(signed_tx)
     }
     fn adjust_signature(&self, tx: &TypedTransaction, signature: &mut Signature) {
@@ -229,6 +229,8 @@ impl EvmRelayerInner {
         epoch: u64,
         pubkey: Vec<u8>,
         pubkey_hash: Byte32,
+        // Only call to chain if this param is None
+        chain_updated: Option<bool>,
     ) -> anyhow::Result<()> {
         if self.pubkey_hash == pubkey_hash && self.epoch == epoch {
             return Err(anyhow!("Pubkey already updated"));
@@ -236,6 +238,9 @@ impl EvmRelayerInner {
         self.epoch = epoch;
         self.pubkey = pubkey;
         self.pubkey_hash = pubkey_hash;
+        if chain_updated.is_some() {
+            return Ok(());
+        }
         let contract_addr = self.config.call_contract.as_ref().unwrap().clone();
         let address: Address = contract_addr.parse()?;
         let contract = ScalarGateway::new(address, self.client.clone());
@@ -300,6 +305,7 @@ impl EvmRelayerInner {
     //     let _pub_key = PublicKey::from(recovered_key);
     //     Ok(true)
     // }
+    // payload must be encoded from (sourceChain, sourceAddress, contractAddress, payloadHash, sourceTxHash, sourceEventIndex)
     pub async fn call_destination_contract(
         &mut self,
         //Payload is a param of a ExecuteData with sigle command
@@ -312,14 +318,11 @@ impl EvmRelayerInner {
         } else {
             self.add_sent_payload(payload_hash);
         }
-        let rpc_url = self.config.rpc_addr.as_ref().unwrap().clone();
-        let contract_addr = self.config.call_contract.as_ref().unwrap().clone();
         //let verified = self.verify_signature(payload.as_slice(), &signature);
         //info!("Verify result {:?}", &verified);
-        let provider = Provider::<Http>::try_from(&rpc_url)?;
-        let client = Arc::new(provider);
+        let contract_addr = self.config.call_contract.as_ref().unwrap().clone();
         let address: Address = contract_addr.parse()?;
-        let contract = ScalarGateway::new(address, client.clone());
+        let contract = ScalarGateway::new(address, self.client.clone());
 
         //Payload is ExecuteData'serialized bytes
         let execute_data = ExecuteData::try_from(payload.as_slice());
@@ -329,7 +332,7 @@ impl EvmRelayerInner {
             create_rsv_signature(&mut rsv_signature);
             ExecuteProof::from_rsv_signature(address.clone(), rsv_signature)
         });
-
+        info!("Execute data {:?}", &execute_data);
         if let (
             Ok(ExecuteData {
                 chain_id: _,
@@ -340,6 +343,14 @@ impl EvmRelayerInner {
             Some(proof),
         ) = (execute_data, execute_proof)
         {
+            //Try to decode params
+            let approve_contract_call_param = params
+                .get(0)
+                .and_then(|param| ApproveContractCallParam::try_from(param.as_slice()).ok());
+            info!(
+                "ApproveContractCallParam {:?}",
+                &approve_contract_call_param
+            );
             // 1. First call ScalarGateway.approveContractCall
             // In the method Scalar gateway mark the smartcontract is valid for call
             let mut tokens = vec![];
@@ -350,11 +361,10 @@ impl EvmRelayerInner {
                 "Execute params for transaction 0x{}",
                 hex::encode(param_data.as_slice())
             );
-            contract
-                .execute(Bytes::from_iter(param_data))
-                .call()
-                .await
-                .map_err(|err| anyhow!("Executed transaction with error {:?}", err))?;
+            let mut contract_call = contract.execute(Bytes::from_iter(param_data));
+            let res = self.send_contract_call(&mut contract_call).await;
+            info!("Call ScalarGateway.approveContractCall result {:?}", &res);
+
             // 2. Call DestinationContract.execute (DestinationContract must extend ScalarExecute)
             // This method call gateway for check if method is valid for call then call execute
             if let Some(ApproveContractCallParam {
@@ -368,19 +378,18 @@ impl EvmRelayerInner {
                 .get(0)
                 .and_then(|param| ApproveContractCallParam::try_from(param.as_slice()).ok())
             {
-                let executable_contract = AxelarExecutable::new(contract_address, client);
+                let executable_contract =
+                    AxelarExecutable::new(contract_address, self.client.clone());
                 let command_id = command_ids.get(0).unwrap().clone();
                 if let Some(contract_payload) = self.get_payload_by_hash(&payload_hash) {
-                    executable_contract
-                        .execute(
-                            command_id,
-                            source_chain,
-                            source_address,
-                            Bytes::from_iter(contract_payload),
-                        )
-                        .call()
-                        .await
-                        .map_err(|err| anyhow!("Call destination execute error {:?}", err))?;
+                    // let mut contract_call = executable_contract.execute(
+                    //     command_id,
+                    //     source_chain,
+                    //     source_address,
+                    //     Bytes::from_iter(contract_payload),
+                    // );
+                    //let res = self.send_contract_call(&mut contract_call).await;
+                    //info!("Call DestinationContract.execute result {:?}", &res);
                 }
             }
         } else {
@@ -424,9 +433,13 @@ impl EvmRelayer {
         epoch: u64,
         pubkey: Vec<u8>,
         pubkey_hash: Byte32,
+        // Only call to chain if this param is None(true)
+        chain_updated: Option<bool>,
     ) -> anyhow::Result<()> {
         let mut guard = self.internal.write().await;
-        guard.update_pubkey(epoch, pubkey, pubkey_hash).await
+        guard
+            .update_pubkey(epoch, pubkey, pubkey_hash, chain_updated)
+            .await
     }
     pub async fn call_destination_contract(
         &self,

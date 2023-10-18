@@ -11,6 +11,7 @@ use crate::{abis::ScalarGateway, types::ContractCallFilter};
 use anyhow::anyhow;
 use ethers::prelude::*;
 use ethers::utils::hex::FromHex;
+use ethers::utils::keccak256;
 pub use evm::*;
 use futures::future::join_all;
 use serde::Deserialize;
@@ -114,7 +115,7 @@ pub async fn start_listener(
             };
             info!("ScalarGateway event {:?}", &event_value);
 
-            let duration = Duration::from_millis(180_000);
+            let duration = Duration::from_millis(60_000);
             let mut inited = false;
             loop {
                 if relayer.has_tss_pubkey().await {
@@ -226,7 +227,7 @@ pub async fn start_listener(
                         info!("Ark message: `{}`", hex::encode(&payload));
                     }
                     Some(Message::Tran(ScalarOutTransaction { message })) => {
-                        info!("Send message to the relayer: `{}`", &message);
+                        info!("Send a ScalarOutTransaction to the relayer");
                         let _ = tx.send(ScalarOutgoingMessage::Transaction(message));
                     }
                     Some(Message::Keygen(KeygenOutput { epoch, pub_key })) => {

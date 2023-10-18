@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{info, warn, Level};
 
@@ -51,6 +52,7 @@ async fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(|| String::from("/opt/config"));
     // let tss_address = Address::from_slice(&keccak256(TSS_ADDRESS.as_bytes()));
+    let updated_chains = Arc::new(Mutex::new(HashMap::<U256, bool>::new()));
     for ind in 0..4 {
         let cfg = config.clone();
         let grpc_handle = tokio::spawn(async move {
@@ -79,7 +81,7 @@ async fn main() -> Result<()> {
             .map(|(index, relayer_config)| Arc::new(EvmRelayer::new(index, relayer_config.clone())))
             .collect();
         let (tx_out, rx_out) = mpsc::unbounded_channel::<ScalarOutgoingMessage>();
-        let sender_handle = spawn_sender(evm_relayers.clone(), rx_out);
+        let sender_handle = spawn_sender(evm_relayers.clone(), updated_chains.clone(), rx_out);
         handles.push(sender_handle);
         let grpc_url = format!(
             "{}:{}",
@@ -107,6 +109,7 @@ async fn main() -> Result<()> {
 
 fn spawn_sender(
     evm_relayers: Vec<Arc<EvmRelayer>>,
+    updated_chains: Arc<Mutex<HashMap<U256, bool>>>,
     mut rx_out: UnboundedReceiver<ScalarOutgoingMessage>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -115,7 +118,9 @@ fn spawn_sender(
             //println!("Push block into stream {:?}", &value);
             match item {
                 ScalarOutgoingMessage::KeygenData((epoch, pubkey)) => {
-                    let _ = handle_keygen_data(&evm_relayers, epoch, pubkey).await;
+                    let _ =
+                        handle_keygen_data(&evm_relayers, updated_chains.clone(), epoch, pubkey)
+                            .await;
                 }
                 ScalarOutgoingMessage::Transaction(tran) => {
                     let _ = handle_transaction(&evm_relayers, tran).await;
@@ -130,6 +135,7 @@ fn spawn_sender(
  */
 async fn handle_keygen_data(
     evm_relayers: &Vec<Arc<EvmRelayer>>,
+    updated_chains: Arc<Mutex<HashMap<U256, bool>>>,
     epoch: u64,
     pubkey: Vec<u8>,
 ) -> anyhow::Result<()> {
@@ -163,22 +169,16 @@ async fn handle_keygen_data(
         hex::encode(pubkey.as_slice()),
         hex::encode(&pubkey_hash)
     );
-    //Find fiest relayer with match chain id
-    let mut map_chain = HashMap::<U256, bool>::new();
     let mut handles = vec![];
     for evm_relayer in evm_relayers.iter() {
-        if evm_relayer
-            .get_chain_id()
-            .await
-            .and_then(|chain_id| map_chain.insert(chain_id.clone(), true))
-            .is_none()
-        {
-            info!("Update pubkey for chain");
+        if let Some(chain_id) = evm_relayer.get_chain_id().await {
+            let value = updated_chains.lock().await.insert(chain_id.clone(), true);
+            info!("Update pubkey for chain {:?}, {:?}", &chain_id, &value);
             let key = pubkey.clone();
             let hash = pubkey_hash.clone();
             let relayer = evm_relayer.clone();
             handles.push(tokio::spawn(async move {
-                if let Err(err) = relayer.update_pubkey(epoch, key, hash).await {
+                if let Err(err) = relayer.update_pubkey(epoch, key, hash, value).await {
                     warn!("Update pubkey error {:?}", &err);
                 }
             }));
