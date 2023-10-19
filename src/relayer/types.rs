@@ -297,21 +297,21 @@ impl ExecuteProof {
         }
     }
 }
-// impl ExecuteProof {
-//     pub fn new(
-//         operators: Vec<Address>,
-//         weights: Vec<U256>,
-//         threshold: U256,
-//         signatures: Vec<Bytes>,
-//     ) -> Self {
-//         Self {
-//             operators,
-//             weights,
-//             threshold,
-//             signatures,
-//         }
-//     }
-// }
+impl ExecuteProof {
+    pub fn new(
+        operators: Vec<Address>,
+        weights: Vec<U256>,
+        threshold: U256,
+        signatures: Vec<Bytes>,
+    ) -> Self {
+        Self {
+            operators,
+            weights,
+            threshold,
+            signatures,
+        }
+    }
+}
 impl Into<Vec<u8>> for ExecuteProof {
     fn into(self) -> Vec<u8> {
         let Self {

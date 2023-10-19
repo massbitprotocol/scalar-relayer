@@ -7,7 +7,7 @@ use scalar_relayer::config::parse_args;
 use scalar_relayer::proto::scalar_abci_client::ScalarAbciClient;
 use scalar_relayer::relayer::{self, EvmRelayer, RelayerConfigs};
 use scalar_relayer::types::{ScalarEventTransaction, ScalarOutgoingMessage};
-use scalar_relayer::{create_rsv_signature, OWNER_PRIVATE_KEY};
+use scalar_relayer::OWNER_PRIVATE_KEY;
 use scalar_relayer::{eth_hash_message, grpc};
 use std::collections::HashMap;
 use std::fs;
@@ -205,15 +205,15 @@ async fn handle_transaction(
     //     k256::AffinePoint::from_encoded_point(&k256::EncodedPoint::from_bytes(pubkey).unwrap())
     //         .unwrap();
     let signature = k256::ecdsa::Signature::from_der(tss_signature.as_slice()).unwrap();
-    let mut rsv_signature: Vec<u8> = signature.to_vec();
-    create_rsv_signature(&mut rsv_signature);
-    let payload_hash = eth_hash_message(payload.as_slice());
-    info!(
-        "Hash 0x{}, origin signature 0x{}, rsv sig 0x{}",
-        hex::encode(&payload_hash),
-        hex::encode(signature.to_bytes().as_slice()),
-        hex::encode(rsv_signature.as_slice())
-    );
+    // let mut rsv_signature: Vec<u8> = signature.to_vec();
+    // create_rsv_signature(&mut rsv_signature);
+    // let payload_hash = eth_hash_message(payload.as_slice());
+    // info!(
+    //     "Hash 0x{}, origin signature 0x{}, rsv sig 0x{}",
+    //     hex::encode(&payload_hash),
+    //     hex::encode(signature.to_bytes().as_slice()),
+    //     hex::encode(rsv_signature.as_slice())
+    // );
     let execute_data = ExecuteData::try_from(payload.as_slice())?;
     let chain_id = execute_data.get_chain_id();
     //Find fiest relayer with match chain id

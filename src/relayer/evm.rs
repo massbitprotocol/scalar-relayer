@@ -1,10 +1,10 @@
 use super::types::ExecuteData;
 use super::types::OwnerShipData;
 use super::RelayerConfig;
-
 use crate::abis::AxelarExecutable;
 use crate::abis::ScalarGateway;
-use crate::create_rsv_signature;
+
+//use crate::create_rsv_signature;
 use crate::eth_hash_message;
 use crate::relayer::types::ApproveContractCallParam;
 use crate::relayer::types::ExecuteParam;
@@ -20,7 +20,7 @@ use ethers::types::{transaction::eip2718::TypedTransaction, Signature};
 use ethers::utils::rlp::Rlp;
 use k256::ecdsa::SigningKey;
 use k256::ecdsa::{RecoveryId, VerifyingKey};
-use k256::PublicKey;
+use k256::{FieldBytes, PublicKey};
 use sha3::Keccak256;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -100,6 +100,38 @@ impl EvmRelayerInner {
         }
         info!("Filled transaction {:?}", &contract_call.tx);
         Ok(())
+    }
+    /*
+        "https://github.com/gakonst/ethers-rs/blob/master/ethers-signers/src/wallet/mod.rs#L149"
+    */
+    fn generate_rsv_signature(
+        &self,
+        payload: &[u8],
+        recoverable_sig: &k256::ecdsa::Signature,
+    ) -> Option<Signature> {
+        let payload_eth_hash = eth_hash_message(payload);
+        let verifying_key = if self.pubkey.len() == 33 {
+            VerifyingKey::from_sec1_bytes(self.pubkey.as_slice()).ok()
+        } else {
+            None
+        };
+        verifying_key.and_then(|verifying_key| {
+            RecoveryId::trial_recovery_from_prehash(
+                &verifying_key,
+                &payload_eth_hash,
+                recoverable_sig,
+            )
+            .ok()
+            .map(|rid| {
+                let v = rid.to_byte() as u64 + 27;
+
+                let r_bytes: FieldBytes = recoverable_sig.r().into();
+                let s_bytes: FieldBytes = recoverable_sig.s().into();
+                let r = U256::from_big_endian(r_bytes.as_slice());
+                let s = U256::from_big_endian(s_bytes.as_slice());
+                Signature { r, s, v }
+            })
+        })
     }
     fn create_signed_transaction(
         &self,
@@ -326,12 +358,17 @@ impl EvmRelayerInner {
 
         //Payload is ExecuteData'serialized bytes
         let execute_data = ExecuteData::try_from(payload.as_slice());
-
-        let execute_proof = self.tss_address.as_ref().map(|address| {
-            let mut rsv_signature = signature.to_vec();
-            create_rsv_signature(&mut rsv_signature);
-            ExecuteProof::from_rsv_signature(address.clone(), rsv_signature)
-        });
+        let srv_signature = self.generate_rsv_signature(payload.as_slice(), &signature);
+        let execute_proof = self
+            .tss_address
+            .as_ref()
+            .zip(srv_signature)
+            .map(|(address, sig)| ExecuteProof::from_rsv_signature(address.clone(), sig.to_vec()));
+        // let execute_proof = self.tss_address.as_ref().map(|address| {
+        //     let mut rsv_signature = signature.to_vec();
+        //     create_rsv_signature(&mut rsv_signature);
+        //     ExecuteProof::from_rsv_signature(address.clone(), rsv_signature)
+        // });
         info!("Execute data {:?}", &execute_data);
         if let (
             Ok(ExecuteData {

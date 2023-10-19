@@ -7,8 +7,9 @@ pub mod proto;
 pub mod relayer;
 pub mod types;
 
-use ethers::types::{Address, U256};
+use ethers::types::{Address, Signature as RsvSignature, U256};
 use ethers::utils::{hex::FromHex, keccak256};
+use k256::ecdsa::{RecoveryId, Signature};
 use std::collections::HashMap;
 use std::env;
 pub const SELECTOR_BURN_TOKEN: &str = "burnToken";
@@ -62,15 +63,32 @@ lazy_static! {
 
 // https://github.com/ethers-io/ethers.js/blob/v5.7/packages/bytes/src.ts/index.ts#L351
 // EIP-2098; pull the v from the top bit of s and clear it
-pub fn create_rsv_signature(signature: &mut Vec<u8>) {
-    if signature.len() == 64 {
-        let first_s = &mut signature[32];
-        let v = (first_s.clone() >> 7);
-        *first_s &= 0x7f;
-        signature.insert(0, v);
-    }
-}
+// pub fn create_rsv_signature(signature: &mut Vec<u8>) {
+//     if signature.len() == 64 {
+//         let first_s = &mut signature[32];
+//         let v = first_s.clone() >> 7;
+//         *first_s &= 0x7f;
+//         signature.insert(0, v);
+//     }
+// }
 
+// pub fn create_rsv_signature(recoverable_sig: &Signature, recover_id: RecoveryId) -> RsvSignature {
+//     let v = u8::from(recovery_id) as u64 + 27;
+
+//     let r_bytes: FieldBytes<Secp256k1> = recoverable_sig.r().into();
+//     let s_bytes: FieldBytes<Secp256k1> = recoverable_sig.s().into();
+//     let r = U256::from_big_endian(r_bytes.as_slice());
+//     let s = U256::from_big_endian(s_bytes.as_slice());
+
+//     RsvSignature { r, s, v }
+// }
+pub fn eth_message(message: &[u8]) -> Vec<u8> {
+    let hash = keccak256(message);
+    let mut eth_message = Vec::with_capacity(ETH_PREFIX_HASH.len() + hash.len());
+    eth_message.extend_from_slice(ETH_PREFIX_HASH.as_bytes());
+    eth_message.extend_from_slice(&hash);
+    eth_message
+}
 pub fn eth_hash_message(message: &[u8]) -> [u8; 32] {
     let hash = keccak256(message);
     let mut eth_message = Vec::with_capacity(ETH_PREFIX_HASH.len() + hash.len());
