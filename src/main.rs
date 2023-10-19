@@ -1,5 +1,6 @@
 use crate::relayer::ExecuteData;
 use anyhow::{anyhow, Result};
+use ethers::types::U256;
 use ethers::utils::keccak256;
 use futures::future::join_all;
 use scalar_relayer::config::parse_args;
@@ -8,6 +9,7 @@ use scalar_relayer::relayer::{self, EvmRelayer, RelayerConfigs};
 use scalar_relayer::types::{ScalarEventTransaction, ScalarOutgoingMessage};
 use scalar_relayer::{create_rsv_signature, OWNER_PRIVATE_KEY};
 use scalar_relayer::{eth_hash_message, grpc};
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
@@ -73,7 +75,8 @@ async fn main() -> Result<()> {
                     && item.rpc_addr.is_some()
                     && item.call_contract.is_some()
             })
-            .map(|relayer_config| Arc::new(EvmRelayer::new(relayer_config.clone())))
+            .enumerate()
+            .map(|(index, relayer_config)| Arc::new(EvmRelayer::new(index, relayer_config.clone())))
             .collect();
         let (tx_out, rx_out) = mpsc::unbounded_channel::<ScalarOutgoingMessage>();
         let sender_handle = spawn_sender(evm_relayers.clone(), rx_out);
@@ -160,17 +163,27 @@ async fn handle_keygen_data(
         hex::encode(pubkey.as_slice()),
         hex::encode(&pubkey_hash)
     );
-
-    let handles = evm_relayers.iter().map(|relayer| {
-        let key = pubkey.clone();
-        let hash = pubkey_hash.clone();
-        let relayer = relayer.clone();
-        tokio::spawn(async move {
-            if let Err(err) = relayer.update_pubkey(epoch, key, hash).await {
-                warn!("Update pubkey error {:?}", &err);
-            }
-        })
-    });
+    //Find fiest relayer with match chain id
+    let mut map_chain = HashMap::<U256, bool>::new();
+    let mut handles = vec![];
+    for evm_relayer in evm_relayers.iter() {
+        if evm_relayer
+            .get_chain_id()
+            .await
+            .and_then(|chain_id| map_chain.insert(chain_id.clone(), true))
+            .is_none()
+        {
+            info!("Update pubkey for chain");
+            let key = pubkey.clone();
+            let hash = pubkey_hash.clone();
+            let relayer = evm_relayer.clone();
+            handles.push(tokio::spawn(async move {
+                if let Err(err) = relayer.update_pubkey(epoch, key, hash).await {
+                    warn!("Update pubkey error {:?}", &err);
+                }
+            }));
+        }
+    }
     join_all(handles).await;
     Ok(())
 }
@@ -183,6 +196,7 @@ async fn handle_transaction(
         payload,
         tss_signature,
     } = serde_json::from_str(message.as_str()).unwrap();
+    info!("Handle transaction to destination chain");
     // https://docs.rs/k256/latest/k256/ecdsa/#recovering-a-verifyingkey-from-a-signature
     // https://bitcoin.stackexchange.com/questions/77191/what-is-the-maximum-size-of-a-der-encoded-ecdsa-signature
     // Todo: new create signature from Signature_Der
@@ -201,16 +215,11 @@ async fn handle_transaction(
         hex::encode(rsv_signature.as_slice())
     );
     let execute_data = ExecuteData::try_from(payload.as_slice())?;
-    let chain_id = execute_data.get_chain_id().to_string();
+    let chain_id = execute_data.get_chain_id();
+    //Find fiest relayer with match chain id
     for evm_relayer in evm_relayers.iter() {
-        if evm_relayer
-            .get_chain_id()
-            .await
-            .unwrap_or_default()
-            .to_string()
-            .as_str()
-            == chain_id.as_str()
-        {
+        info!("Call destination contract with first matched relayer");
+        if evm_relayer.get_chain_id().await.unwrap_or(U256::zero()) == chain_id {
             if let Err(err) = evm_relayer
                 .call_destination_contract(payload, signature)
                 .await
