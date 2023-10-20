@@ -471,6 +471,8 @@ impl EvmRelayerInner {
                         );
                         let res = self.send_contract_call(&mut contract_call).await;
                         info!("Call DestinationContract.execute result {:?}", &res);
+                    } else {
+                        info!("Payload not found");
                     }
                 }
             }
