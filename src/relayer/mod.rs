@@ -4,13 +4,12 @@ use crate::{create_mock_event, SELECTOR_APPROVE_CONTRACT_CALL, SUPPORTED_CHAINS}
 mod evm;
 mod types;
 
+use crate::abis::{
+    ContractCallFilter as ChainContractCallFilter, ScalarGateway, ScalarGatewayEvents,
+};
 use crate::proto::{scalar_abci_client::ScalarAbciClient, ScalarAbciRequest};
 use crate::relayer::types::ApproveContractCallParam;
-use crate::types::ScalarOutgoingMessage;
-use crate::{
-    abis::{ScalarGateway, ScalarGatewayEvents},
-    types::ContractCallFilter,
-};
+use crate::types::{ContractCallFilter, ScalarOutgoingMessage};
 use anyhow::anyhow;
 use ethers::prelude::*;
 use ethers::utils::keccak256;
@@ -92,62 +91,85 @@ pub async fn start_listener(
         let listener_handle: JoinHandle<Result<(), _>> = tokio::spawn(async move {
             let chain_name_str = chain_name.as_str();
             //emit_mock_event(relayer, chain_name_str, tx_external_event.clone()).await;
+
             let gateway = ScalarGateway::new(address, client.clone());
-            let events = gateway.events().from_block(9794376);
-            let mut stream = events
+            let contract_call_event = gateway
+                .event::<ChainContractCallFilter>()
+                .from_block(9897823);
+            let mut contract_call_event_stream = contract_call_event
                 .stream()
                 .await
                 .map_err(|e| Err::<(), anyhow::Error>(anyhow!("{:?}", e)))
                 .expect("Contract error")
                 .take(1);
-
-            while let Some(Ok(evt)) = stream.next().await {
-                match evt {
-                    ScalarGatewayEvents::ContractCallApprovedFilter(evt) => {
-                        info!("ScalarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::ContractCallFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                        let value = ContractCallFilter::from(evt);
-                        if let Ok(message) = create_external_message(chain_name_str, &value) {
-                            // relayer
-                            //     .store_payload(value.payload.clone(), value.payload_hash.clone())
-                            //     .await;
-                            let _ = tx_external_event.send(message);
-                        }
-                    }
-                    ScalarGatewayEvents::ContractCallApprovedWithMintFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::ContractCallWithTokenFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::ExecutedFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::GovernanceTransferredFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::MintLimiterTransferredFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::OperatorshipTransferredFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::TokenDeployedFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::TokenMintLimitUpdatedFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::TokenSentFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
-                    ScalarGatewayEvents::UpgradedFilter(evt) => {
-                        info!("AxelarGateway event {:?}", &evt);
-                    }
+            while let Some(Ok(evt)) = contract_call_event_stream.next().await {
+                info!("External event {:?}", &evt);
+                let value = ContractCallFilter::from(evt);
+                if let Ok(message) = create_external_message(chain_name_str, &value) {
+                    //Store payload in to relay's store
+                    relayer
+                        .store_payload(value.payload.to_vec(), value.payload_hash.clone())
+                        .await;
+                    let _ = tx_external_event.send(message);
                 }
             }
+            // let all_events = gateway.events().from_block(9897823);
+            // let mut all_stream = all_events
+            //     .stream()
+            //     .await
+            //     .map_err(|e| Err::<(), anyhow::Error>(anyhow!("{:?}", e)))
+            //     .expect("Contract error")
+            //     .take(1);
+
+            // while let Some(Ok(evt)) = all_stream.next().await {
+            //     info!("External event {:?}", &evt);
+            //     match evt {
+            //         ScalarGatewayEvents::ContractCallApprovedFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::ContractCallFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //             let value = ContractCallFilter::from(evt);
+            //             if let Ok(message) = create_external_message(chain_name_str, &value) {
+            //                 // relayer
+            //                 //     .store_payload(value.payload.clone(), value.payload_hash.clone())
+            //                 //     .await;
+            //                 let _ = tx_external_event.send(message);
+            //             }
+            //         }
+            //         ScalarGatewayEvents::ContractCallApprovedWithMintFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::ContractCallWithTokenFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::ExecutedFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::GovernanceTransferredFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::MintLimiterTransferredFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::OperatorshipTransferredFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::TokenDeployedFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::TokenMintLimitUpdatedFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::TokenSentFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //         ScalarGatewayEvents::UpgradedFilter(evt) => {
+            //             info!("ScalarGateway event {:?}", &evt);
+            //         }
+            //     }
+            // }
+            info!("Finished chain event listener");
             Ok(())
         });
         handles.push(listener_handle);
