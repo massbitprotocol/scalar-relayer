@@ -1,4 +1,3 @@
-use ethcontract::common::hash::keccak256;
 use ethers::prelude::*;
 use ethers::{contract::Contract, types::transaction::eip2718::TypedTransaction};
 use hex::FromHex;

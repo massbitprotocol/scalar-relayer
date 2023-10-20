@@ -36,7 +36,6 @@ async fn main() -> anyhow::Result<()> {
     let sender_addr = "0x2F467c697798c24788086e327B0BFD25952105fe";
     let sender_addr = sender_addr.parse::<Address>()?;
     let signer = OWNER_PRIVATE_KEY.parse::<LocalWallet>()?;
-    let signer = private_key.parse::<LocalWallet>()?;
     info!(
         "Call from address {:?}",
         hex::encode(signer.address().as_bytes()).as_str()
@@ -44,7 +43,8 @@ async fn main() -> anyhow::Result<()> {
     assert_eq!(signer.address(), sender_addr);
     let provider = Provider::<Http>::try_from(rpc_url)?;
     let signer_middleware = provider.with_signer(signer.clone());
-    let signing_key = SigningKey::from_slice(hex::decode(private_key)?.as_slice())?;
+    let signing_key =
+        SigningKey::from_slice(hex::decode(OWNER_PRIVATE_KEY.as_bytes())?.as_slice())?;
     let verifying_key = signing_key.verifying_key();
     //info!("Default sender {:?}", provider.default_sender());
     let client = Arc::new(signer_middleware);

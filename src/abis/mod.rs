@@ -4,4 +4,4 @@ mod scalar_gateway;
 mod scalar_gateway_proxy;
 
 pub use axelar_executable::AxelarExecutable;
-pub use scalar_gateway::{ContractCallFilter, ScalarGateway};
+pub use scalar_gateway::{ContractCallFilter, ScalarGateway, ScalarGatewayEvents};
