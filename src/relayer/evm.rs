@@ -20,8 +20,7 @@ use ethers::types::{transaction::eip2718::TypedTransaction, Signature};
 use ethers::utils::rlp::Rlp;
 use k256::ecdsa::SigningKey;
 use k256::ecdsa::{RecoveryId, VerifyingKey};
-use k256::{FieldBytes, PublicKey};
-use sha3::Keccak256;
+use k256::FieldBytes;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -98,6 +97,16 @@ impl EvmRelayerInner {
         if let Some(chain_id) = self.config.get_chain_id() {
             contract_call.tx.set_chain_id(chain_id.as_u64());
         }
+        if contract_call.tx.gas().is_none() {
+            let gas = self
+                .client
+                .estimate_gas(&contract_call.tx, contract_call.block.clone())
+                .await;
+            info!("Estimate gas {:?}", &gas);
+            contract_call
+                .tx
+                .set_gas(gas.unwrap_or_else(|_| U256::from(50000)));
+        }
         info!("Filled transaction {:?}", &contract_call.tx);
         Ok(())
     }
@@ -109,12 +118,15 @@ impl EvmRelayerInner {
         payload: &[u8],
         recoverable_sig: &k256::ecdsa::Signature,
     ) -> Option<Signature> {
+        info!("generate_rsv_signature");
+        info!("pubkey {:?}", self.pubkey.as_slice());
         let payload_eth_hash = eth_hash_message(payload);
         let verifying_key = if self.pubkey.len() == 33 {
             VerifyingKey::from_sec1_bytes(self.pubkey.as_slice()).ok()
         } else {
             None
         };
+        assert!(verifying_key.is_some());
         verifying_key.and_then(|verifying_key| {
             RecoveryId::trial_recovery_from_prehash(
                 &verifying_key,
@@ -198,6 +210,7 @@ impl EvmRelayerInner {
         let _ = self.fill_smartcontract_transaction(contract_call).await;
         let signed_tx = self.create_signed_transaction(contract_call)?;
         info!("Signed tx {:?}", signed_tx);
+
         let pending_tx = self.client.send_raw_transaction(signed_tx).await?;
         pending_tx
             .await
@@ -267,6 +280,11 @@ impl EvmRelayerInner {
         if self.pubkey_hash == pubkey_hash && self.epoch == epoch {
             return Err(anyhow!("Pubkey already updated"));
         }
+        info!(
+            "Set pubkey {:?} with hash {:?}",
+            pubkey.as_slice(),
+            &pubkey_hash
+        );
         self.epoch = epoch;
         self.pubkey = pubkey;
         self.pubkey_hash = pubkey_hash;
@@ -345,6 +363,11 @@ impl EvmRelayerInner {
         signature: k256::ecdsa::Signature,
     ) -> anyhow::Result<()> {
         let payload_hash = eth_hash_message(payload.as_slice());
+        info!(
+            "Payload {:?} with hash {:?}",
+            hex::encode(payload.as_slice()),
+            hex::encode(&payload_hash)
+        );
         if self.send_payloads.contains_key(&payload_hash) {
             return Err(anyhow!("Payload already send to destination chain"));
         } else {
@@ -354,7 +377,7 @@ impl EvmRelayerInner {
         //info!("Verify result {:?}", &verified);
         let contract_addr = self.config.call_contract.as_ref().unwrap().clone();
         let address: Address = contract_addr.parse()?;
-        let contract = ScalarGateway::new(address, self.client.clone());
+        let destination_gateway = ScalarGateway::new(address, self.client.clone());
 
         //Payload is ExecuteData'serialized bytes
         let execute_data = ExecuteData::try_from(payload.as_slice());
@@ -369,7 +392,13 @@ impl EvmRelayerInner {
         //     create_rsv_signature(&mut rsv_signature);
         //     ExecuteProof::from_rsv_signature(address.clone(), rsv_signature)
         // });
+
         info!("Execute data {:?}", &execute_data);
+        let proof = execute_proof
+            .clone()
+            .map(|proof| hex::encode::<Vec<u8>>(proof.into()));
+        info!("Proof {:?}", proof);
+
         if let (
             Ok(ExecuteData {
                 chain_id: _,
@@ -398,7 +427,7 @@ impl EvmRelayerInner {
                 "Execute params for transaction 0x{}",
                 hex::encode(param_data.as_slice())
             );
-            let mut contract_call = contract.execute(Bytes::from_iter(param_data));
+            let mut contract_call = destination_gateway.execute(Bytes::from_iter(param_data));
             let res = self.send_contract_call(&mut contract_call).await;
             info!("Call ScalarGateway.approveContractCall result {:?}", &res);
 
@@ -415,18 +444,34 @@ impl EvmRelayerInner {
                 .get(0)
                 .and_then(|param| ApproveContractCallParam::try_from(param.as_slice()).ok())
             {
-                let executable_contract =
-                    AxelarExecutable::new(contract_address, self.client.clone());
                 let command_id = command_ids.get(0).unwrap().clone();
-                if let Some(contract_payload) = self.get_payload_by_hash(&payload_hash) {
-                    // let mut contract_call = executable_contract.execute(
-                    //     command_id,
-                    //     source_chain,
-                    //     source_address,
-                    //     Bytes::from_iter(contract_payload),
-                    // );
-                    //let res = self.send_contract_call(&mut contract_call).await;
-                    //info!("Call DestinationContract.execute result {:?}", &res);
+                //First check if ContractCallApproved
+                let contract_call_approved = destination_gateway
+                    .is_contract_call_approved(
+                        command_id.clone(),
+                        source_chain.clone(),
+                        source_address.clone(),
+                        contract_address.clone(),
+                        payload_hash.clone(),
+                    )
+                    .call()
+                    .await;
+                info!("Contract call approved {:?}", contract_call_approved);
+                if let Ok(true) = contract_call_approved {
+                    //Second call destination contract
+                    let executable_contract =
+                        AxelarExecutable::new(contract_address, self.client.clone());
+
+                    if let Some(contract_payload) = self.get_payload_by_hash(&payload_hash) {
+                        let mut contract_call = executable_contract.execute(
+                            command_id,
+                            source_chain,
+                            source_address,
+                            Bytes::from_iter(contract_payload),
+                        );
+                        let res = self.send_contract_call(&mut contract_call).await;
+                        info!("Call DestinationContract.execute result {:?}", &res);
+                    }
                 }
             }
         } else {

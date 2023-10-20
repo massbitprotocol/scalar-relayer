@@ -12,25 +12,13 @@ use ethers::{
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+#[derive(Clone, Debug)]
 pub struct OwnerShipData {
-    operators: Vec<Address>,
-    weights: Vec<U256>,
-    threshold: U256,
+    pub operators: Vec<Address>,
+    pub weights: Vec<U256>,
+    pub threshold: U256,
 }
-impl OwnerShipData {
-    // pub fn new(
-    //     operators: Vec<Address>,
-    //     weights: Vec<U256>,
-    //     threshold: U256,
-    // ) -> Self {
-    //     Self {
-    //         operators,
-    //         weights,
-    //         threshold,
-    //     }
-    // }
-}
+impl OwnerShipData {}
 impl From<Address> for OwnerShipData {
     fn from(value: Address) -> Self {
         Self {
@@ -65,6 +53,47 @@ impl Into<Vec<u8>> for OwnerShipData {
     }
 }
 
+impl TryFrom<&[u8]> for OwnerShipData {
+    type Error = anyhow::Error;
+    fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
+        let mut params = vec![];
+        //operators
+        params.push(ParamType::Array(Box::new(ParamType::Address)));
+        //weights,
+        params.push(ParamType::Array(Box::new(ParamType::Uint(32))));
+        //threshold
+        params.push(ParamType::Uint(32));
+        let tokens = ethers::abi::decode(params.as_slice(), value)
+            .map_err(|err| anyhow!("Decode error {:?}", &err))?;
+        assert_eq!(tokens.len(), 3);
+        if let Some((Token::Array(operators), Token::Array(weights), Token::Uint(threshold))) =
+            tokens.into_iter().tuples().next()
+        {
+            let operators = operators
+                .into_iter()
+                .map(|operator| match operator {
+                    Token::Address(addr) => addr,
+                    _ => Address::default(),
+                })
+                .collect();
+            let weights = weights
+                .into_iter()
+                .map(|weight| match weight {
+                    Token::Uint(w) => w,
+                    _ => U256::zero(),
+                })
+                .collect();
+            Ok(OwnerShipData {
+                operators,
+                weights,
+                threshold,
+            })
+        } else {
+            Err(anyhow!("Cannot deserialize OwnerShipData"))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApproveContractCallParam {
     pub source_chain: String,
@@ -75,11 +104,11 @@ pub struct ApproveContractCallParam {
     pub source_tx_hash: Byte32,
     pub source_event_index: U256,
 }
-impl From<(String, String, ContractCallFilter)> for ApproveContractCallParam {
-    fn from((chain, tran, value): (String, String, ContractCallFilter)) -> Self {
+impl From<(&str, String, &ContractCallFilter)> for ApproveContractCallParam {
+    fn from((chain, tran, value): (&str, String, &ContractCallFilter)) -> Self {
         let contract_address = value.destination_contract_address.parse().unwrap();
         Self {
-            source_chain: chain,
+            source_chain: chain.to_string(),
             source_address: value.sender.to_string(),
             contract_address,
             payload_hash: value.payload_hash.clone(),
@@ -275,12 +304,12 @@ impl Into<Vec<u8>> for ExecuteData {
         ethers::abi::encode(tokens.as_slice())
     }
 }
-
+#[derive(Debug, Clone)]
 pub struct ExecuteProof {
-    operators: Vec<Address>,
-    weights: Vec<U256>,
-    threshold: U256,
-    signatures: Vec<Bytes>,
+    pub operators: Vec<Address>,
+    pub weights: Vec<U256>,
+    pub threshold: U256,
+    pub signatures: Vec<Bytes>,
 }
 impl ExecuteProof {
     pub async fn owner_sign(data: &ExecuteData) -> Self {
@@ -344,6 +373,61 @@ impl Into<Vec<u8>> for ExecuteProof {
     }
 }
 
+impl TryFrom<&[u8]> for ExecuteProof {
+    type Error = anyhow::Error;
+    fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
+        let mut params = vec![];
+        //operators
+        params.push(ParamType::Array(Box::new(ParamType::Address)));
+        //weights,
+        params.push(ParamType::Array(Box::new(ParamType::Uint(32))));
+        //threshold
+        params.push(ParamType::Uint(32));
+        //signatures
+        params.push(ParamType::Array(Box::new(ParamType::Bytes)));
+        let tokens = ethers::abi::decode(params.as_slice(), value)
+            .map_err(|err| anyhow!("Decode error {:?}", &err))?;
+        assert_eq!(tokens.len(), 4);
+        if let Some((
+            Token::Array(operators),
+            Token::Array(weights),
+            Token::Uint(threshold),
+            Token::Array(signatures),
+        )) = tokens.into_iter().tuples().next()
+        {
+            let operators = operators
+                .into_iter()
+                .map(|operator| match operator {
+                    Token::Address(addr) => addr,
+                    _ => Address::default(),
+                })
+                .collect();
+            let weights = weights
+                .into_iter()
+                .map(|weight| match weight {
+                    Token::Uint(w) => w,
+                    _ => U256::zero(),
+                })
+                .collect();
+            let signatures = signatures
+                .into_iter()
+                .map(|signature| match signature {
+                    Token::Bytes(sig) => sig,
+                    _ => vec![],
+                })
+                .collect();
+            Ok(ExecuteProof {
+                operators,
+                weights,
+                threshold,
+                signatures,
+            })
+        } else {
+            Err(anyhow!("Cannot deserialize execute data"))
+        }
+    }
+}
+
 // impl TryFrom<(Address, DerSignature)> for ExecuteProof {
 //     type Error = anyhow::Error;
 //     #[inline(always)]
@@ -377,9 +461,10 @@ impl ExecuteProof {
         }
     }
 }
+#[derive(Debug, Clone)]
 pub struct ExecuteParam {
-    data: ExecuteData,
-    proof: ExecuteProof,
+    pub data: ExecuteData,
+    pub proof: ExecuteProof,
 }
 
 impl ExecuteParam {
@@ -400,5 +485,27 @@ impl Into<Vec<u8>> for ExecuteParam {
         tokens.push(Token::Bytes(data.into()));
         tokens.push(Token::Bytes(proof.into()));
         ethers::abi::encode(tokens.as_slice())
+    }
+}
+
+impl TryFrom<&[u8]> for ExecuteParam {
+    type Error = anyhow::Error;
+    fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
+        let mut params = vec![];
+        //data
+        params.push(ParamType::Bytes);
+        //proof
+        params.push(ParamType::Bytes);
+        let tokens = ethers::abi::decode(params.as_slice(), value)
+            .map_err(|err| anyhow!("Decode error {:?}", &err))?;
+        assert_eq!(tokens.len(), 2);
+        if let Some((Token::Bytes(data), Token::Bytes(proof))) = tokens.into_iter().tuples().next()
+        {
+            let data = ExecuteData::try_from(data.as_slice()).unwrap();
+            let proof = ExecuteProof::try_from(proof.as_slice()).unwrap();
+            Ok(ExecuteParam { data, proof })
+        } else {
+            Err(anyhow!("Cannot deserialize execute data"))
+        }
     }
 }

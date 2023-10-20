@@ -7,11 +7,14 @@ pub mod proto;
 pub mod relayer;
 pub mod types;
 
-use ethers::types::{Address, Signature as RsvSignature, U256};
+use crate::types::ContractCallFilter;
+use anyhow::anyhow;
+use ethers::prelude::*;
+use ethers::types::{Address, U256};
 use ethers::utils::{hex::FromHex, keccak256};
-use k256::ecdsa::{RecoveryId, Signature};
 use std::collections::HashMap;
 use std::env;
+use tracing::info;
 pub const SELECTOR_BURN_TOKEN: &str = "burnToken";
 pub const SELECTOR_DEPLOY_TOKEN: &str = "deployToken";
 pub const SELECTOR_MINT_TOKEN: &str = "mintToken";
@@ -72,16 +75,23 @@ lazy_static! {
 //     }
 // }
 
-// pub fn create_rsv_signature(recoverable_sig: &Signature, recover_id: RecoveryId) -> RsvSignature {
-//     let v = u8::from(recovery_id) as u64 + 27;
-
-//     let r_bytes: FieldBytes<Secp256k1> = recoverable_sig.r().into();
-//     let s_bytes: FieldBytes<Secp256k1> = recoverable_sig.s().into();
-//     let r = U256::from_big_endian(r_bytes.as_slice());
-//     let s = U256::from_big_endian(s_bytes.as_slice());
-
-//     RsvSignature { r, s, v }
-// }
+pub fn recover_address(tss_pubkey: &[u8]) -> anyhow::Result<Address> {
+    secp256k1::PublicKey::from_slice(tss_pubkey)
+        .map_err(|err| anyhow!("Error while decompress public key {:?}", &err))
+        .and_then(|pk| {
+            let uncompressed_pubkey = pk.serialize_uncompressed();
+            info!(
+                "Uncompressed pubkey 0x{}",
+                hex::encode(&uncompressed_pubkey)
+            );
+            // Ignore first byte (0x04)
+            let pubkey = &uncompressed_pubkey[1..];
+            let hash = keccak256(&pubkey);
+            hex::encode(&hash[12..])
+                .parse()
+                .map_err(|err| anyhow!("Adress parser error {:?}", &err))
+        })
+}
 pub fn eth_message(message: &[u8]) -> Vec<u8> {
     let hash = keccak256(message);
     let mut eth_message = Vec::with_capacity(ETH_PREFIX_HASH.len() + hash.len());
@@ -95,4 +105,22 @@ pub fn eth_hash_message(message: &[u8]) -> [u8; 32] {
     eth_message.extend_from_slice(ETH_PREFIX_HASH.as_bytes());
     eth_message.extend_from_slice(&hash);
     keccak256(&eth_message)
+}
+
+pub fn create_mock_event() -> types::ContractCallFilter {
+    let bytes = Bytes::from_hex("0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000f48656c6c6f204176616c616e6368650000000000000000000000000000000000").unwrap();
+    ContractCallFilter {
+        sender: Address::from_slice(
+            Vec::from_hex("0B501635fa8bff8B6Be916BCF325E583864e0c1f")
+                .unwrap()
+                .as_slice(),
+        ),
+        destination_chain: "goerli".to_owned(),
+        destination_contract_address: "0x7A8F852a7ECf88E92FA500De77e2047edDF1e8b5".to_owned(),
+        payload_hash: [
+            112, 101, 15, 4, 9, 145, 221, 135, 52, 181, 191, 255, 190, 2, 100, 178, 161, 219, 6,
+            255, 101, 134, 235, 14, 47, 14, 216, 50, 87, 249, 177, 71,
+        ],
+        payload: bytes.clone(),
+    }
 }
